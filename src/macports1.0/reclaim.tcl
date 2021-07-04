@@ -76,6 +76,8 @@ namespace eval reclaim {
         uninstall_unrequested
         uninstall_inactive
         remove_distfiles
+        remove_builds
+        remove_ccache
 
         if {![macports::global_option_isset ports_dryrun]} {
             set last_run_contents [read_last_run_file]
@@ -100,6 +102,82 @@ namespace eval reclaim {
             }
             if {$last_run_contents ne "disabled"} {
                 update_last_run
+            }
+        }
+    }
+
+    proc remove_builds {} {
+        # Delete portdbpath/build directories
+        global macports::portdbpath
+
+        # The root build directory location
+        set root_build      [file join ${macports::portdbpath} build]
+
+        ui_msg "$macports::ui_prefix Build location: ${root_build}"
+
+        if {[macports::global_option_isset ports_dryrun]} {
+            ui_msg "Deleting... (dry run)"
+            ui_info [msgcat::mc "Skipping deletion of all build directories under %s (dry run)" $root_build]
+            return
+        }
+
+        set builddirs [glob -nocomplain -directory $root_build *]
+        if {[llength $builddirs] == 0} {
+            ui_info [msgcat::mc "No build directories to delete"]
+            return
+        }
+
+        set retval 0
+        if {[info exists macports::ui_options(questions_yesno)]} {
+            set retval [$macports::ui_options(questions_yesno) "" "" "" "y" 0 "Would you like to delete all the build directories?"]
+        }
+
+        if {${retval} == 0} {
+            ui_info [msgcat::mc "Deleting all build directories under %s" $root_build]
+            try -pass_signal {
+                file delete -force -- {*}$builddirs
+            } catch {{*} eCode eMessage} {
+                ui_debug "$::errorInfo"
+                ui_error "$eMessage"
+            }
+        }
+    }
+
+    proc remove_ccache {} {
+        # Delete everything under ccache directory - default is build/.ccache
+        global macports::ccache_dir
+
+        if {![file exists ${macports::ccache_dir}]} {
+            ui_info [msgcat::mc "Skipping deletion of ccache directory: %s does not exist." $macports::ccache_dir]
+            return
+        }
+
+        ui_msg "$macports::ui_prefix ccache location: ${macports::ccache_dir}"
+
+        if {[macports::global_option_isset ports_dryrun]} {
+            ui_msg "Deleting... (dry run)"
+            ui_info [msgcat::mc "Skipping deletion of everything under %s (dry run)" $macports::ccache_dir]
+            return
+        }
+
+        set ccachedirs [glob -nocomplain -directory $macports::ccache_dir *]
+        if {[llength $ccachedirs] == 0} {
+            ui_info [msgcat::mc "No ccache directories to delete"]
+            return
+        }
+
+        set retval 0
+        if {[info exists macports::ui_options(questions_yesno)]} {
+            set retval [$macports::ui_options(questions_yesno) "" "" "" "y" 0 "Would you like to delete everything under the ccache directory?"]
+        }
+
+        if {${retval} == 0} {
+            ui_info [msgcat::mc "Deleting everything under %s" $macports::ccache_dir]
+            try -pass_signal {
+                file delete -force -- {*}$ccachedirs
+            } catch {{*} eCode eMessage} {
+                ui_debug "$::errorInfo"
+                ui_error "$eMessage"
             }
         }
     }
@@ -180,6 +258,7 @@ namespace eval reclaim {
             } catch {{*} eCode eMessage} {
                 $progress intermission
                 ui_warn [msgcat::mc "Failed to open port %s from registry: %s" [$port name] $eMessage]
+                #registry::entry close $port
                 continue
             }
 
@@ -213,6 +292,7 @@ namespace eval reclaim {
             mportclose $mport
 
             $progress update $i $port_count
+            #registry::entry close $port
             incr i
         }
 
@@ -461,6 +541,8 @@ namespace eval reclaim {
             if {[$port state] eq "imaged"} {
                 lappend inactive_ports $port
                 incr inactive_count
+            } else {
+                #registry::entry close $port
             }
         }
 
@@ -492,6 +574,10 @@ namespace eval reclaim {
             } else {
                 ui_msg "Not uninstalling ports."
             }
+            foreach port $inactive_ports {
+                # may have been uninstalled and thus already closed
+                #catch {registry::entry close $port}
+            }
         }
         return 0
     }
@@ -520,7 +606,8 @@ namespace eval reclaim {
                 set isrequested($portname) [$port requested]
             }
             if {$isrequested($portname) == 0} {
-                foreach dependent [$port dependents] {
+                set dependents [$port dependents]
+                foreach dependent $dependents {
                     set dname [$dependent name]
                     if {![info exists isrequested($dname)]} {
                         ui_debug "$portname appears to have a circular dependency involving $dname"
@@ -532,11 +619,16 @@ namespace eval reclaim {
                         break
                     }
                 }
+                #foreach dependent $dependents {
+                #    registry::entry close $dependent
+                #}
 
                 if {$isrequested($portname) == 0} {
                     lappend unnecessary_ports $port
                     lappend unnecessary_names "$portname @[$port version]_[$port revision][$port variants]"
                     incr unnecessary_count
+                } else {
+                    #registry::entry close $port
                 }
             }
         }
@@ -562,7 +654,11 @@ namespace eval reclaim {
                     }
                 }
             } else {
-                ui_msg "Not uninstalling ports; use 'port setrequested' mark a port as explicitly requested."
+                ui_msg "Not uninstalling ports; use 'port setrequested' to mark a port as explicitly requested."
+            }
+            foreach port $unnecessary_ports {
+                # may have been uninstalled and thus already closed
+                #catch {registry::entry close $port}
             }
         }
         return 0

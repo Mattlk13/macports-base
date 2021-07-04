@@ -1,6 +1,6 @@
 # -*- coding: utf-8; mode: tcl; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*- vim:fenc=utf-8:filetype=tcl:et:sw=4:ts=4:sts=4
 #
-# Copyright (c) 2007 - 2015 The MacPorts Project
+# Copyright (c) 2007 - 2020 The MacPorts Project
 # Copyright (c) 2007 Markus W. Weissmann <mww@macports.org>
 # Copyright (c) 2002 - 2003 Apple Inc.
 # All rights reserved.
@@ -32,11 +32,14 @@
 
 package provide portconfigure 1.0
 package require portutil 1.0
+package require portprogress 1.0
+package require struct::set
 
 set org.macports.configure [target_new org.macports.configure portconfigure::configure_main]
 target_provides ${org.macports.configure} configure
 target_requires ${org.macports.configure} main fetch checksum extract patch
 target_prerun ${org.macports.configure} portconfigure::configure_start
+target_postrun ${org.macports.configure} portconfigure::configure_finish
 
 namespace eval portconfigure {
 }
@@ -234,8 +237,24 @@ options configure.optflags \
 default configure.optflags      -Os
 default configure.cflags        {${configure.optflags}}
 default configure.objcflags     {${configure.optflags}}
-default configure.cppflags      {-I${prefix}/include}
-default configure.ldflags       {-L${prefix}/lib -Wl,-headerpad_max_install_names}
+default configure.cppflags      {[portconfigure::configure_get_cppflags]}
+proc portconfigure::configure_get_cppflags {} {
+    global prefix
+    if {[option compiler.limit_flags]} {
+        return ""
+    } else {
+        return -I${prefix}/include
+    }
+}
+default configure.ldflags       {[portconfigure::configure_get_ldflags]}
+proc portconfigure::configure_get_ldflags {} {
+    global prefix
+    if {[option compiler.limit_flags]} {
+        return -Wl,-headerpad_max_install_names
+    } else {
+        return "-L${prefix}/lib -Wl,-headerpad_max_install_names"
+    }
+}
 default configure.libs          {}
 default configure.fflags        {${configure.optflags}}
 default configure.f90flags      {${configure.optflags}}
@@ -257,11 +276,12 @@ default configure.pkg_config_path   {}
 
 options configure.build_arch configure.ld_archflags \
         configure.sdk_version configure.sdkroot \
-        configure.developer_dir
+        configure.sysroot configure.developer_dir
 default configure.build_arch    {[portconfigure::choose_supported_archs ${build_arch}]}
 default configure.ld_archflags  {[portconfigure::configure_get_ld_archflags]}
 default configure.sdk_version   {$macosx_sdk_version}
 default configure.sdkroot       {[portconfigure::configure_get_sdkroot ${configure.sdk_version}]}
+default configure.sysroot       {[expr {${configure.sdkroot} ne "" ? ${configure.sdkroot} : "/"}]}
 default configure.developer_dir {[portconfigure::configure_get_developer_dir]}
 foreach tool {cc objc f77 f90 fc} {
     options configure.${tool}_archflags
@@ -308,8 +328,8 @@ options                            \
     compiler.mpi                   \
     compiler.thread_local_storage
 
-default compiler.c_standard            1989
-default compiler.cxx_standard          1998
+default compiler.c_standard            {[expr {$supported_archs ne "noarch" ? 1989 : ""}]}
+default compiler.cxx_standard          {[expr {$supported_archs ne "noarch" ? 1998 : ""}]}
 default compiler.openmp_version        {}
 default compiler.mpi                   {}
 default compiler.thread_local_storage  no
@@ -323,30 +343,27 @@ proc portconfigure::configure_start {args} {
 
     set compiler [option configure.compiler]
     set valid_compilers {
-        {^apple-gcc-(4\.[02])$}             {MacPorts Apple GCC %s}
-        {^cc$}                              {System cc}
-        {^clang$}                           {Xcode Clang}
-        {^gcc$}                             {System GCC}
-        {^gcc-(3\.3|4\.[02])$}              {Xcode GCC %s}
-        {^llvm-gcc-4\.2$}                   {Xcode LLVM-GCC 4.2}
-        {^macports-clang$}                  {MacPorts Clang (port select)}
-        {^macports-clang-(\d+\.\d+)$}       {MacPorts Clang %s}
-        {^macports-gcc$}                    {MacPorts GCC (port select)}
-        {^macports-gcc-(\d+(?:\.\d+)?)$}    {MacPorts GCC %s}
-        {^macports-llvm-gcc-4\.2$}          {MacPorts LLVM-GCC 4.2}
-        {^macports-g95$}                    {MacPorts G95}
-        {^macports-mpich-default$}          {MacPorts MPICH Wrapper for MacPorts' Default C/C++ Compiler}
-        {^macports-openmpi-default$}        {MacPorts Open MPI Wrapper for MacPorts' Default C/C++ Compiler}
-        {^macports-mpich-clang$}            {MacPorts MPICH Wrapper for Xcode Clang}
-        {^macports-openmpi-clang$}          {MacPorts Open MPI Wrapper for Xcode Clang}
-        {^macports-mpich-clang-(\d+\.\d+)$}
-            {MacPorts MPICH Wrapper for Clang %s}
-        {^macports-openmpi-clang-(\d+\.\d+)$}
-            {MacPorts Open MPI Wrapper for Clang %s}
-        {^macports-mpich-gcc-(\d+(?:\.\d+)?)$}
-            {MacPorts MPICH Wrapper for GCC %s}
-        {^macports-openmpi-gcc-(\d+(?:\.\d+)?)$}
-            {MacPorts Open MPI Wrapper for GCC %s}
+        {^apple-gcc-(4\.[02])$}                    {MacPorts Apple GCC %s}
+        {^cc$}                                     {System cc}
+        {^clang$}                                  {Xcode Clang}
+        {^gcc$}                                    {System GCC}
+        {^gcc-(3\.3|4\.[02])$}                     {Xcode GCC %s}
+        {^llvm-gcc-4\.2$}                          {Xcode LLVM-GCC 4.2}
+        {^macports-clang$}                         {MacPorts Clang (port select)}
+        {^macports-clang-(\d+(?:\.\d+)?)$}         {MacPorts Clang %s}
+        {^macports-gcc$}                           {MacPorts GCC (port select)}
+        {^macports-gcc-(\d+(?:\.\d+)?)$}           {MacPorts GCC %s}
+        {^macports-llvm-gcc-4\.2$}                 {MacPorts LLVM-GCC 4.2}
+        {^macports-g95$}                           {MacPorts G95}
+        {^macports-mpich-default$}                 {MacPorts MPICH Wrapper for MacPorts' Default C/C++ Compiler}
+        {^macports-openmpi-default$}               {MacPorts Open MPI Wrapper for MacPorts' Default C/C++ Compiler}
+        {^macports-mpich-clang$}                   {MacPorts MPICH Wrapper for Xcode Clang}
+        {^macports-openmpi-clang$}                 {MacPorts Open MPI Wrapper for Xcode Clang}
+        {^macports-mpich-clang-(\d+(?:\.\d+)?)$}   {MacPorts MPICH Wrapper for Clang %s}
+        {^macports-openmpi-clang-(\d+(?:\.\d+)?)$} {MacPorts Open MPI Wrapper for Clang %s}
+        {^macports-mpich-gcc-(\d+(?:\.\d+)?)$}     {MacPorts MPICH Wrapper for GCC %s}
+        {^macports-openmpi-gcc-(\d+(?:\.\d+)?)$}   {MacPorts Open MPI Wrapper for GCC %s}
+        {^macports-(clang|gcc)-devel$}             {MacPorts %s Development}
     }
     foreach {re fmt} $valid_compilers {
         if {[set matches [regexp -inline $re $compiler]] ne ""} {
@@ -388,27 +405,66 @@ proc portconfigure::configure_start {args} {
 
 # internal function to choose the default configure.build_arch and
 # configure.universal_archs based on supported_archs and build_arch or
-# universal_archs
+# universal_archs, plus the SDK being used
 proc portconfigure::choose_supported_archs {archs} {
     global supported_archs configure.sdk_version
-    # macOS 10.14 SDK only supports one arch, x86_64
-    if {${configure.sdk_version} ne "" && [vercmp ${configure.sdk_version} 10.14] >= 0} {
-        if {"x86_64" in $archs && ($supported_archs eq "" || "x86_64" in $supported_archs)} {
-            return x86_64
+
+    if {${configure.sdk_version} ne ""} {
+        # Figure out which archs are supported by the SDK
+        if {[vercmp ${configure.sdk_version} 11] >= 0} {
+            set sdk_archs [list arm64 x86_64]
+        } elseif {[vercmp ${configure.sdk_version} 10.14] >= 0} {
+            set sdk_archs x86_64
+        } elseif {[vercmp ${configure.sdk_version} 10.7] >= 0} {
+            set sdk_archs [list x86_64 i386]
+        } elseif {[vercmp ${configure.sdk_version} 10.6] >= 0} {
+            set sdk_archs [list x86_64 i386 ppc]
+        } elseif {[vercmp ${configure.sdk_version} 10.5] >= 0} {
+            set sdk_archs [list x86_64 i386 ppc ppc64]
         } else {
-            return ""
+            # 10.4u
+            set sdk_archs [list i386 ppc ppc64]
+        }
+
+        # Set intersection_archs to the intersection of what's supported by
+        # the SDK and the port's supported_archs
+        if {$supported_archs eq ""} {
+            # Blank supported_archs; allow whatever the SDK does.
+            set intersection_archs $sdk_archs
+        } else {
+            set intersection_archs [list]
+            foreach arch $sdk_archs {
+                if {$arch in $supported_archs} {
+                    lappend intersection_archs $arch
+                }
+            }
+            if {$intersection_archs eq ""} {
+                # No archs in common.
+                return ""
+            }
         }
     } elseif {$supported_archs eq ""} {
+        # Nothing to filter on.
         return $archs
+    } else {
+        # No SDK version (maybe not on macOS)
+        set intersection_archs $supported_archs
     }
-    set ret {}
+    set ret [list]
+    # Filter out unsupported archs, but allow demoting to another arch
+    # supported by the SDK if needed, e.g. 64-bit to 32-bit. That means
+    # e.g. if build_arch is x86_64 it's still possible to build a port
+    # that sets supported_archs to "i386 ppc" if the SDK allows it.
+    array set arch_demotions [list \
+                                arm64 x86_64 \
+                                x86_64 i386 \
+                                ppc64 ppc \
+                                i386 ppc]
     foreach arch $archs {
-        if {$arch in $supported_archs} {
+        if {$arch in $intersection_archs} {
             set add_arch $arch
-        } elseif {$arch eq "x86_64" && "i386" in $supported_archs} {
-            set add_arch "i386"
-        } elseif {$arch eq "ppc64" && "ppc" in $supported_archs} {
-            set add_arch "ppc"
+        } elseif {[info exists arch_demotions($arch)] && $arch_demotions($arch) in $intersection_archs} {
+            set add_arch $arch_demotions($arch)
         } else {
             continue
         }
@@ -432,7 +488,7 @@ proc portconfigure::configure_get_archflags {tool} {
             $tool in {cc cxx objc objcxx}
         } then {
             set flags "-arch ${configure.build_arch}"
-        } elseif {${configure.build_arch} eq "x86_64" || ${configure.build_arch} eq "ppc64"} {
+        } elseif {${configure.build_arch} in [list arm64 ppc64 x86_64]} {
             set flags "-m64"
         } elseif {${configure.compiler} ne "gcc-3.3"} {
             set flags "-m32"
@@ -454,8 +510,22 @@ proc portconfigure::configure_get_ld_archflags {} {
     }
 }
 
+# find a "close enough" match for the given sdk_version in sdk_path
+proc portconfigure::find_close_sdk {sdk_version sdk_path} {
+    # only works right for versions >= 11, which is all we need
+    set sdk_major [lindex [split $sdk_version .] 0]
+    set sdks [glob -nocomplain -directory $sdk_path MacOSX${sdk_major}*.sdk]
+    foreach sdk [lsort -command vercmp $sdks] {
+        # Sanity check - mostly empty SDK directories are known to exist
+        if {[file exists ${sdk}/usr/include/sys/cdefs.h]} {
+            return $sdk
+        }
+    }
+    return ""
+}
+
 proc portconfigure::configure_get_sdkroot {sdk_version} {
-    global developer_dir macosx_version xcodeversion os.arch os.platform use_xcode
+    global developer_dir macos_version_major xcodeversion os.arch os.major os.platform use_xcode
 
     # This is only relevant for macOS
     if {${os.platform} ne "darwin"} {
@@ -463,32 +533,65 @@ proc portconfigure::configure_get_sdkroot {sdk_version} {
     }
 
     # Special hack for Tiger/ppc, since the system libraries do not contain intel slices
-    if {${os.arch} eq "powerpc" && $macosx_version eq "10.4" && [variant_exists universal] && [variant_isset universal]} {
+    if {${os.arch} eq "powerpc" && $macos_version_major eq "10.4" && [variant_exists universal] && [variant_isset universal]} {
         return ${developer_dir}/SDKs/MacOSX10.4u.sdk
     }
 
     # Use the DevSDK (eg: /usr/include) if present and the requested SDK version matches the host version
-    if {$sdk_version eq $macosx_version && [file exists /usr/include]} {
+    if {${os.major} < 19 && $sdk_version eq $macos_version_major && [file exists /usr/include/sys/cdefs.h]} {
         return {}
     }
 
+    set sdk_major [lindex [split $sdk_version .] 0]
     set cltpath /Library/Developer/CommandLineTools
     # Check CLT first if Xcode shouldn't be used
     if {![tbool use_xcode]} {
         set sdk ${cltpath}/SDKs/MacOSX${sdk_version}.sdk
         if {[file exists $sdk]} {
             return $sdk
+        } elseif {$sdk_major >= 11} {
+            # SDKs have minor versions as of macOS 11
+            set sdk [find_close_sdk $sdk_version ${cltpath}/SDKs]
+            if {$sdk ne ""} {
+                return $sdk
+            }
         }
-        if {![catch {exec env DEVELOPER_DIR=${cltpath} xcrun --sdk macosx${sdk_version} --show-sdk-path 2> /dev/null} sdk]} {
-            return $sdk
+
+        if {$sdk_major >= 11 && $sdk_major == $macos_version_major} {
+            set try_versions [list ${sdk_major}.0 [option macos_version]]
+        } else {
+            set try_versions [list $sdk_version]
         }
+        foreach try_version $try_versions {
+            if {[info exists ::portconfigure::sdkroot_cache(macosx${try_version})]} {
+                if {$::portconfigure::sdkroot_cache(macosx${try_version}) ne ""} {
+                    return $::portconfigure::sdkroot_cache(macosx${try_version})
+                }
+                # negative result cached, do nothing here
+            } elseif {![catch {exec env DEVELOPER_DIR=${cltpath} xcrun --sdk macosx${try_version} --show-sdk-path 2> /dev/null} sdk]} {
+                set ::portconfigure::sdkroot_cache(macosx${try_version}) $sdk
+                return $sdk
+            } else {
+                set ::portconfigure::sdkroot_cache(macosx${try_version}) ""
+            }
+        }
+
         # Fallback on "macosx"
         set sdk ${cltpath}/SDKs/MacOSX.sdk
         if {[file exists $sdk]} {
             return $sdk
         }
-        if {![catch {exec env DEVELOPER_DIR=${cltpath} xcrun --sdk macosx --show-sdk-path 2> /dev/null} sdk]} {
+
+        if {[info exists ::portconfigure::sdkroot_cache(macosx)]} {
+            if {$::portconfigure::sdkroot_cache(macosx) ne ""} {
+                return $::portconfigure::sdkroot_cache(macosx)
+            }
+            # negative result cached, do nothing here
+        } elseif {![catch {exec env DEVELOPER_DIR=${cltpath} xcrun --sdk macosx --show-sdk-path 2> /dev/null} sdk]} {
+            set ::portconfigure::sdkroot_cache(macosx) $sdk
             return $sdk
+        } else {
+            set ::portconfigure::sdkroot_cache(macosx) ""
         }
     }
 
@@ -506,15 +609,42 @@ proc portconfigure::configure_get_sdkroot {sdk_version} {
 
     if {[file exists $sdk]} {
         return $sdk
+    } elseif {$sdk_major >= 11} {
+        # SDKs have minor versions as of macOS 11
+        set sdk [find_close_sdk $sdk_version ${sdks_dir}]
+        if {$sdk ne ""} {
+            return $sdk
+        }
     }
 
-    if {![catch {exec xcrun --sdk macosx${sdk_version} --show-sdk-path 2> /dev/null} sdk]} {
-        return $sdk
+    if {$sdk_major >= 11 && $sdk_major == $macos_version_major} {
+        set try_versions [list ${sdk_major}.0 [option macos_version]]
+    } else {
+        set try_versions [list $sdk_version]
+    }
+    foreach try_version $try_versions {
+        if {[info exists ::portconfigure::sdkroot_cache(macosx${try_version},noclt)]} {
+            if {$::portconfigure::sdkroot_cache(macosx${try_version},noclt) ne ""} {
+                return $::portconfigure::sdkroot_cache(macosx${try_version},noclt)
+            }
+            # negative result cached, do nothing here
+        } elseif {![catch {exec xcrun --sdk macosx${try_version} --show-sdk-path 2> /dev/null} sdk]} {
+            set ::portconfigure::sdkroot_cache(macosx${try_version},noclt) $sdk
+            return $sdk
+        } else {
+            set ::portconfigure::sdkroot_cache(macosx${try_version},noclt) ""
+        }
     }
 
     set sdk ${cltpath}/SDKs/MacOSX${sdk_version}.sdk
     if {[file exists $sdk]} {
         return $sdk
+    } elseif {$sdk_major >= 11} {
+        # SDKs have minor versions as of macOS 11
+        set sdk [find_close_sdk $sdk_version ${cltpath}/SDKs]
+        if {$sdk ne ""} {
+            return $sdk
+        }
     }
 
     set sdk ${sdks_dir}/MacOSX.sdk
@@ -530,12 +660,16 @@ proc portconfigure::configure_get_sdkroot {sdk_version} {
     # to run on 10.x but only include an SDK for 10.x+1. Combined with the disappearance of
     # /usr/include, that means not having this fallback would cause great breakage.
     # See <https://trac.macports.org/ticket/57143>
-    if {![catch {exec xcrun --sdk macosx --show-sdk-path 2> /dev/null} sdk]} {
+    if {[info exists ::portconfigure::sdkroot_cache(macosx,noclt)]} {
+        # no negative-cached case here because that would mean overall failure
+        return $::portconfigure::sdkroot_cache(macosx,noclt)
+    } elseif {![catch {exec xcrun --sdk macosx --show-sdk-path 2> /dev/null} sdk]} {
+        set ::portconfigure::sdkroot_cache(macosx,noclt) $sdk
         return $sdk
     }
 
-    ui_error "Unable to determine location of a macOS SDK."
-    return -code error "Unable to determine location of a macOS SDK."
+    # We can get here if $sdk_version != $macos_version_major on old OS versions
+    return {}
 }
 
 # internal function to determine DEVELOPER_DIR according to Xcode dependency
@@ -582,14 +716,16 @@ proc portconfigure::arch_flag_supported {compiler {multiple_arch_flags no}} {
 
 proc portconfigure::compiler_port_name {compiler} {
     set valid_compiler_ports {
-        {^apple-gcc-(\d+)\.(\d+)$}                          {apple-gcc%s%s}
-        {^macports-clang-(\d+\.\d+)$}                       {clang-%s}
-        {^macports-(llvm-)?gcc-(\d+)(?:\.(\d+))?$}          {%sgcc%s%s}
+        {^apple-gcc-(\d+)\.(\d+)$}                                                    {apple-gcc%s%s}
+        {^macports-clang-(\d+(?:\.\d+)?)$}                                            {clang-%s}
+        {^macports-(llvm-)?gcc-(\d+)(?:\.(\d+))?$}                                    {%sgcc%s%s}
         {^macports-(mpich|openmpi|mpich-devel|openmpi-devel)-default$}                {%s-default}
         {^macports-(mpich|openmpi|mpich-devel|openmpi-devel)-clang$}                  {%s-clang}
         {^macports-(mpich|openmpi|mpich-devel|openmpi-devel)-clang-(\d+)\.(\d+)$}     {%s-clang%s%s}
+        {^macports-(mpich|openmpi|mpich-devel|openmpi-devel)-clang-(\d+)$}            {%s-clang%s}
         {^macports-(mpich|openmpi|mpich-devel|openmpi-devel)-gcc-(\d+)(?:\.(\d+))?$}  {%s-gcc%s%s}
-        {^macports-g95$}                                    {g95}
+        {^macports-g95$}                                                              {g95}
+        {^macports-(clang|gcc)-devel$}                                                {%s-devel}
     }
     foreach {re fmt} $valid_compiler_ports {
         if {[set matches [regexp -inline $re $compiler]] ne ""} {
@@ -688,15 +824,18 @@ proc portconfigure::max_version {verA verB} {
 }
 #
 # https://releases.llvm.org/3.1/docs/ClangReleaseNotes.html#cchanges
+# _Noreturn implemented in clang 3.3.0:
+# https://github.com/llvm/llvm-project/commit/debc59d1f360b1f7a041de72c02d76ed131370c6
 # https://gcc.gnu.org/c99status.html
 # https://gcc.gnu.org/wiki/C11Status
 # https://trac.macports.org/wiki/XcodeVersionInfo
 #--------------------------------------------------------------------
 #|  C Standard  |   Clang   |  Xcode Clang  |   Xcode   |    GCC    |
 #|------------------------------------------------------------------|
-#| 1989 (C89)   |     -     |        -      |     -     |     -     |
-#| 1999 (C99)   |     -     |        -      |     -     |    4.0    |
-#| 2011 (C11)   |    3.1    |    318.0.61   |    4.3    |    4.9    |
+#| 1989 (C89)   |     -     |       -       |     -     |     -     |
+#| 1999 (C99)   |     -     |       -       |     -     |    4.0    |
+#| 2011 (C11)   |    3.3    |  500.2.75     |    5.0    |    4.9    |
+#| 2017 (C17)   |    6.0    |  1000.11.45.2 |   10.0    |    8.0    |
 #--------------------------------------------------------------------
 #
 # https://clang.llvm.org/cxx_status.html
@@ -706,11 +845,11 @@ proc portconfigure::max_version {verA verB} {
 # https://trac.macports.org/wiki/XcodeVersionInfo
 #--------------------------------------------------------------------
 #| C++ Standard |   Clang   |  Xcode Clang  |   Xcode   |    GCC    |
-#|--------------------------------=---------------------------------|
+#|------------------------------------------------------------------|
 #| 1998 (C++98) |     -     |       -       |     -     |     -     |
 #| 2011 (C++11) |    3.3    |   500.2.75    |    5.0    |   4.8.1   |
-#| 2014 (C++14) |    3.4    |   600.0.54    |    6.1    |     5     |
-#| 2017 (C++17) |    5.0    |   902.0.39.1  |    9.3    |     7     |
+#| 2014 (C++14) |    3.4    |   602.0.49    |    6.3    |     5     |
+#| 2017 (C++17) |    5.0    |  1000.11.45.2 |   10.0    |     7     |
 #--------------------------------------------------------------------
 #
 # https://openmp.llvm.org
@@ -725,6 +864,21 @@ proc portconfigure::max_version {verA verB} {
 #|      4.0       | Partial |    Future?    | Future? |   4.9   |
 #|      4.5       | Partial |    Future?    | Future? |   ???   |
 #----------------------------------------------------------------
+#
+# https://trac.macports.org/wiki/CompilerEnvironmentVariables
+# https://trac.macports.org/wiki/CompilerSelection#EnvironmentVariables
+#--------------------------------------------------------------------
+#|   Environment Variable   | Xcode Clang | Xcode GCC | Clang | GCC |
+#|------------------------------------------------------------------|
+#| CPATH                    |   318.0.4   |    all    |  all  | all |
+#| LIBRARY_PATH             |  421.0.57   |    all    |  all  | all |
+#| MACOSX_DEPLOYMENT_TARGET |     all     |    all    |  all  | all |
+#| SDKROOT                  | OS X 10.9*  |   none    |  all  |  7  |
+#| DEVELOPER_DIR            | OS X 10.9*  |    N/A    |  N/A  | N/A |
+#| CC_PRINT_OPTIONS         |     all     |    all    |  all  | all |
+#| CC_PRINT_OPTIONS_FILE    |     all     |    all    |  all  | all |
+#--------------------------------------------------------------------
+# * /usr/lib/libxcselect.dylib exists
 #
 # utility procedure: get minimum command line compilers version based on restrictions
 proc portconfigure::get_min_command_line {compiler} {
@@ -745,29 +899,49 @@ proc portconfigure::get_min_command_line {compiler} {
 
     switch ${compiler} {
         clang {
-            if {[option configure.cxx_stdlib] eq "libc++"} {
-                set cxx [file tail [portconfigure::configure_get_compiler cxx ${compiler}]]
-                if {${cxx} ne "clang++"} {
-                    # 3.2 <= Xcode < 4.0 does not provide clang++
-                    return none
-                }
+            if {[option configure.cxx_stdlib] eq "libc++" && ${os.major} < 11} {
+                # no Xcode clang can build against libc++ on < 10.7
+                return none
             }
-            if {${compiler.c_standard} >= 2011} {
-                set min_value [max_version $min_value 318.0.61]
+            if {${compiler.c_standard} >= 2017} {
+                set min_value [max_version $min_value 1000.11.45.2]
+            } elseif {${compiler.c_standard} >= 2011} {
+                set min_value [max_version $min_value 500.2.75]
             }
             if {${compiler.cxx_standard} >= 2017} {
-                set min_value [max_version $min_value 902.0.39.1]
+                set min_value [max_version $min_value 1000.11.45.2]
             } elseif {${compiler.cxx_standard} >= 2014} {
-                set min_value [max_version $min_value 600.0.54]
+                set min_value [max_version $min_value 602.0.49]
             } elseif {${compiler.cxx_standard} >= 2011} {
                 set min_value [max_version $min_value 500.2.75]
+            }
+            if {${compiler.cxx_standard} >= 2011 && ${compiler.thread_local_storage}} {
+                # macOS has supported thread-local storage since Mac OS X Lion.
+                # So __thread (GNU extension) and _Thread_local (C11) could be used.
+                # However, the C++11 keyword was not supported until Xcode 8
+                #    (https://developer.apple.com/library/archive/releasenotes/DeveloperTools/RN-Xcode/Chapters/Introduction.html#//apple_ref/doc/uid/TP40001051-CH1-SW127)
+                #    (https://developer.apple.com/videos/play/wwdc2016-405/?time=354).
+                set min_value [max_version $min_value 800.0.38]
+            }
+            if {[option compiler.limit_flags] || [option compiler.support_environment_paths]} {
+                set min_value [max_version $min_value 421.0.57]
+            }
+            if {
+                ([option compiler.limit_flags] || [option compiler.support_environment_sdkroot]) &&
+                [option configure.sdkroot] ne "" &&
+                !([file exists /usr/lib/libxcselect.dylib] || ${os.major} >= 20)
+            } {
+                return none
             }
         }
         llvm-gcc-4.2 -
         gcc-4.2 -
         gcc-4.0 -
         apple-gcc-4.2 {
-            if {${compiler.c_standard} > 1999 || ${compiler.cxx_standard} >= 2011 || [option configure.cxx_stdlib] eq "libc++"} {
+            if {${compiler.c_standard} > 1999 || ${compiler.cxx_standard} >= 2011 || [option configure.cxx_stdlib] eq "libc++" || ${compiler.thread_local_storage}} {
+                return none
+            }
+            if {([option compiler.limit_flags] || [option compiler.support_environment_sdkroot]) && [option configure.sdkroot] ne ""} {
                 return none
             }
         }
@@ -782,15 +956,27 @@ proc portconfigure::get_min_command_line {compiler} {
 proc portconfigure::get_min_clang {} {
     global compiler.c_standard compiler.cxx_standard compiler.openmp_version compiler.thread_local_storage
     set min_value 1.0
-    if {${compiler.c_standard} >= 2011} {
+    if {${compiler.c_standard} >= 2017} {
+        set min_value [max_version $min_value 6.0]
+    } elseif {${compiler.c_standard} >= 2011} {
         set min_value [max_version $min_value 3.1]
     }
     if {${compiler.cxx_standard} >= 2017} {
         set min_value [max_version $min_value 5.0]
     } elseif {${compiler.cxx_standard} >= 2014} {
-        set min_value [max_version $min_value 3.4]
+        if {[option configure.cxx_stdlib] eq "libc++"} {
+            set min_value [max_version $min_value 3.4]
+        } else {
+            # macports-libstdc++ only macports-clang compilers >= 5.0 support this
+            set min_value [max_version $min_value 5.0]
+        }
     } elseif {${compiler.cxx_standard} >= 2011} {
-        set min_value [max_version $min_value 3.3]
+        if {[option configure.cxx_stdlib] eq "libc++"} {
+            set min_value [max_version $min_value 3.3]
+        } else {
+            # macports-libstdc++ only macports-clang compilers >= 5.0 support this
+            set min_value [max_version $min_value 5.0]
+        }
     }
     if {[vercmp ${compiler.openmp_version} 4.0] >= 0} {
         set min_value [max_version $min_value 6.0]
@@ -807,12 +993,18 @@ proc portconfigure::get_min_clang {} {
 proc portconfigure::get_min_gcc {} {
     global compiler.c_standard compiler.cxx_standard compiler.openmp_version compiler.thread_local_storage
 
-    if {[option configure.cxx_stdlib] ne "" && [option configure.cxx_stdlib] ne "macports-libstdc++"} {
+    # Technically these only support macports-libstdc++, but if all the
+    # options that use the system libstdc++ have been blacklisted, we
+    # still need to use something. So only skip them entirely when
+    # using libc++.
+    if {[option configure.cxx_stdlib] eq "libc++"} {
         return none
     }
 
     set min_value 1.0
-    if {${compiler.c_standard} >= 2011} {
+    if {${compiler.c_standard} >= 2017} {
+        set min_value [max_version $min_value 8.0]
+    } elseif {${compiler.c_standard} >= 2011} {
         set min_value [max_version $min_value 4.3]
     }  elseif {${compiler.c_standard} >= 1999} {
         set min_value [max_version $min_value 4.0]
@@ -839,7 +1031,12 @@ proc portconfigure::get_min_gcc {} {
         # GCC emulates thread-local storage, but it seems to be broken on older versions of GCC
         set min_value [max_version $min_value 4.5]
     }
-
+    if {
+        ([option compiler.limit_flags] || [option compiler.support_environment_sdkroot]) &&
+        [option configure.sdkroot] ne ""
+    } {
+        set min_value [max_version $min_value 7.0]
+    }
     return ${min_value}
 }
 # utility procedure: get minimum Gfortran version based on restrictions
@@ -859,6 +1056,12 @@ proc portconfigure::get_min_gfortran {} {
         # GCC emulates thread-local storage, but it seems to be broken on older versions of GCC
         set min_value [max_version $min_value 4.5]
     }
+    if {
+        ([option compiler.limit_flags] || [option compiler.support_environment_sdkroot]) &&
+        [option configure.sdkroot] ne ""
+    } {
+        set min_value [max_version $min_value 7.0]
+    }
     return ${min_value}
 }
 #
@@ -870,6 +1073,12 @@ proc portconfigure::g95_ok {} {
     }
     if {${compiler.openmp_version} ne ""} {
         # G95 does not support OpenMP
+        return no
+    }
+    if {
+        ([option compiler.limit_flags] || [option compiler.support_environment_sdkroot]) &&
+        [option configure.sdkroot] ne ""
+    } {
         return no
     }
     return yes
@@ -961,10 +1170,26 @@ proc portconfigure::get_clang_compilers {} {
         source ${compiler_file}
     } else {
         ui_debug "clang_compilers.tcl not found in ports tree, using built-in selections"
-        lappend compilers macports-clang-8.0 macports-clang-7.0 macports-clang-6.0 macports-clang-5.0
+        # clang 9.0 and older build on 10.6+ (darwin 10)
+        # clang 7.0 and older build on 10.5+ (darwin 9)
+        # clang 3.4 and older build on 10.4+ (darwin 8)
+        if {${os.major} >= 10} {
+            lappend compilers macports-clang-9.0 \
+                macports-clang-8.0
+        }
+
+        if {${os.major} >= 9} {
+            lappend compilers macports-clang-7.0 \
+                macports-clang-6.0 \
+                macports-clang-5.0
+        }
+
         if {${os.major} < 16} {
             # The Sierra SDK requires a toolchain that supports class properties
-            lappend compilers macports-clang-3.7 macports-clang-3.4
+            if {${os.major} >= 9} {
+                lappend compilers macports-clang-3.7
+            }
+            lappend compilers macports-clang-3.4
             if {${os.major} < 9} {
                 lappend compilers macports-clang-3.3
             }
@@ -1031,13 +1256,13 @@ proc portconfigure::get_compiler_fallback {} {
     }
     set system_compilers ""
     foreach c ${available_apple_compilers} {
-        if {$c eq "apple-gcc-4.2"} {
-            # provided by a port, should be the latest version
-            lappend system_compilers $c
-            continue
-        }
         set vmin [portconfigure::get_min_command_line $c]
         if {$vmin ne "none"} {
+            if {$c eq "apple-gcc-4.2"} {
+                # provided by a port, should be the latest version
+                lappend system_compilers $c
+                continue
+            }
             set v [compiler.command_line_tools_version $c]
             if {[vercmp ${vmin} $v] <= 0} {
                 lappend system_compilers $c
@@ -1132,7 +1357,7 @@ proc portconfigure::find_developer_tool {name} {
 
 # internal function to find correct compilers
 proc portconfigure::configure_get_compiler {type {compiler {}}} {
-    global configure.compiler prefix
+    global configure.compiler prefix_frozen
     if {$compiler eq ""} {
         if {[option compiler.require_fortran]} {
             switch $type {
@@ -1153,14 +1378,14 @@ proc portconfigure::configure_get_compiler {type {compiler {}}} {
     if {[regexp {^apple-gcc(-4\.[02])$} $compiler -> suffix]} {
         switch $type {
             cc      -
-            objc    { return ${prefix}/bin/gcc-apple${suffix} }
+            objc    { return ${prefix_frozen}/bin/gcc-apple${suffix} }
             cxx     -
             objcxx  {
                 if {$suffix eq "-4.2"} {
-                    return ${prefix}/bin/g++-apple${suffix}
+                    return ${prefix_frozen}/bin/g++-apple${suffix}
                 }
             }
-            cpp     { return ${prefix}/bin/cpp-apple${suffix} }
+            cpp     { return ${prefix_frozen}/bin/cpp-apple${suffix} }
         }
     } elseif {$compiler eq "clang"} {
         switch $type {
@@ -1197,18 +1422,18 @@ proc portconfigure::configure_get_compiler {type {compiler {}}} {
         }
         switch $type {
             cc      -
-            objc    { return ${prefix}/bin/clang${suffix} }
+            objc    { return ${prefix_frozen}/bin/clang${suffix} }
             cxx     -
-            objcxx  { return ${prefix}/bin/clang++${suffix} }
+            objcxx  { return ${prefix_frozen}/bin/clang++${suffix} }
         }
-    } elseif {[regexp {^macports-clang(-\d+\.\d+)$} $compiler -> suffix]} {
+    } elseif {[regexp {^macports-clang(-\d+(?:\.\d+)?)$} $compiler -> suffix]} {
         set suffix "-mp${suffix}"
         switch $type {
             cc      -
-            objc    { return ${prefix}/bin/clang${suffix} }
+            objc    { return ${prefix_frozen}/bin/clang${suffix} }
             cxx     -
-            objcxx  { return ${prefix}/bin/clang++${suffix} }
-            cpp     { return ${prefix}/bin/clang-cpp${suffix} }
+            objcxx  { return ${prefix_frozen}/bin/clang++${suffix} }
+            cpp     { return ${prefix_frozen}/bin/clang-cpp${suffix} }
         }
     } elseif {[regexp {^macports-gcc(-\d+(?:\.\d+)?)?$} $compiler -> suffix]} {
         if {$suffix ne ""} {
@@ -1216,62 +1441,84 @@ proc portconfigure::configure_get_compiler {type {compiler {}}} {
         }
         switch $type {
             cc      -
-            objc    { return ${prefix}/bin/gcc${suffix} }
+            objc    { return ${prefix_frozen}/bin/gcc${suffix} }
             cxx     -
-            objcxx  { return ${prefix}/bin/g++${suffix} }
-            cpp     { return ${prefix}/bin/cpp${suffix} }
+            objcxx  { return ${prefix_frozen}/bin/g++${suffix} }
+            cpp     { return ${prefix_frozen}/bin/cpp${suffix} }
             fc      -
             f77     -
-            f90     { return ${prefix}/bin/gfortran${suffix} }
+            f90     { return ${prefix_frozen}/bin/gfortran${suffix} }
+        }
+    } elseif {[regexp {^macports-(clang|gcc)-devel$} $compiler -> comp]} {
+        set suffix "-mp-devel"
+        if { $comp eq "clang" } {
+            switch $type {
+                cc      -
+                objc    { return ${prefix_frozen}/bin/clang${suffix} }
+                cxx     -
+                objcxx  { return ${prefix_frozen}/bin/clang++${suffix} }
+                cpp     { return ${prefix_frozen}/bin/clang-cpp${suffix} }
+            }
+        } else {
+            switch $type {
+                cc      -
+                objc    { return ${prefix_frozen}/bin/gcc${suffix} }
+                cxx     -
+                objcxx  { return ${prefix_frozen}/bin/g++${suffix} }
+                cpp     { return ${prefix_frozen}/bin/cpp${suffix} }
+                fc      -
+                f77     -
+                f90     { return ${prefix_frozen}/bin/gfortran${suffix} }
+            }
         }
     } elseif {$compiler eq "macports-llvm-gcc-4.2"} {
         switch $type {
             cc      -
-            objc    { return ${prefix}/bin/llvm-gcc-4.2 }
+            objc    { return ${prefix_frozen}/bin/llvm-gcc-4.2 }
             cxx     -
-            objcxx  { return ${prefix}/bin/llvm-g++-4.2 }
-            cpp     { return ${prefix}/bin/llvm-cpp-4.2 }
+            objcxx  { return ${prefix_frozen}/bin/llvm-g++-4.2 }
+            cpp     { return ${prefix_frozen}/bin/llvm-cpp-4.2 }
         }
     } elseif {$compiler eq "macports-g95"} {
         switch $type {
             fc      -
             f77     -
-            f90     { return ${prefix}/bin/g95 }
+            f90     { return ${prefix_frozen}/bin/g95 }
         }
     } elseif {[regexp {^macports-(mpich|openmpi|mpich-devel|openmpi-devel)-clang$} $compiler -> mpi]} {
         switch $type {
             cc      -
-            objc    { return ${prefix}/bin/mpicc-${mpi}-clang }
+            objc    { return ${prefix_frozen}/bin/mpicc-${mpi}-clang }
             cxx     -
-            objcxx  { return ${prefix}/bin/mpicxx-${mpi}-clang }
+            objcxx  { return ${prefix_frozen}/bin/mpicxx-${mpi}-clang }
         }
-    } elseif {[regexp {^macports-(mpich|openmpi|mpich-devel|openmpi-devel)-clang-(\d+\.\d+)$} $compiler -> mpi version]} {
+    } elseif {[regexp {^macports-(mpich|openmpi|mpich-devel|openmpi-devel)-clang-(\d+(?:\.\d+)?)$} $compiler -> mpi version]} {
         set suffix [join [split ${version} .] ""]
         switch $type {
             cc      -
-            objc    { return ${prefix}/bin/mpicc-${mpi}-clang${suffix} }
+            objc    { return ${prefix_frozen}/bin/mpicc-${mpi}-clang${suffix} }
             cxx     -
-            objcxx  { return ${prefix}/bin/mpicxx-${mpi}-clang${suffix} }
-            cpp     { return ${prefix}/bin/clang-cpp-mp-${version} }
+            objcxx  { return ${prefix_frozen}/bin/mpicxx-${mpi}-clang${suffix} }
+            cpp     { return ${prefix_frozen}/bin/clang-cpp-mp-${version} }
         }
     } elseif {[regexp {^macports-(mpich|openmpi|mpich-devel|openmpi-devel)-gcc-(\d+(?:\.\d+)?)$} $compiler -> mpi version]} {
         set suffix [join [split ${version} .] ""]
         switch $type {
             cc      -
-            objc    { return ${prefix}/bin/mpicc-${mpi}-gcc${suffix} }
+            objc    { return ${prefix_frozen}/bin/mpicc-${mpi}-gcc${suffix} }
             cxx     -
-            objcxx  { return ${prefix}/bin/mpicxx-${mpi}-gcc${suffix} }
-            cpp     { return ${prefix}/bin/cpp-mp-${version} }
+            objcxx  { return ${prefix_frozen}/bin/mpicxx-${mpi}-gcc${suffix} }
+            cpp     { return ${prefix_frozen}/bin/cpp-mp-${version} }
             fc      -
             f77     -
-            f90     { return ${prefix}/bin/mpifort-${mpi}-gcc${suffix} }
+            f90     { return ${prefix_frozen}/bin/mpifort-${mpi}-gcc${suffix} }
         }
     } elseif {[regexp {^macports-(mpich|openmpi|mpich-devel|openmpi-devel)-default$} $compiler -> mpi]} {
         switch $type {
             cc      -
-            objc    { return ${prefix}/bin/mpicc-${mpi}-mp }
+            objc    { return ${prefix_frozen}/bin/mpicc-${mpi}-mp }
             cxx     -
-            objcxx  { return ${prefix}/bin/mpicxx-${mpi}-mp }
+            objcxx  { return ${prefix_frozen}/bin/mpicxx-${mpi}-mp }
         }
     }
     # Fallbacks
@@ -1335,6 +1582,7 @@ proc portconfigure::add_compiler_port_dependencies {compiler} {
         ui_debug "Adding depends_build port:$compiler_port"
         depends_build-delete port:$compiler_port
         depends_build-append port:$compiler_port
+        license_noconflict-append $compiler_port
 
         # add C++ runtime dependency if necessary
         if {[regexp {^macports-gcc-(\d+(?:\.\d+)?)?$} ${compiler} -> gcc_version]} {
@@ -1346,36 +1594,38 @@ proc portconfigure::add_compiler_port_dependencies {compiler} {
                 ui_debug "gcc_dependencies.tcl not found in ports tree, using built-in data"
                 # compiler links against libraries in libgcc\d* and/or libgcc-devel
                 if {[vercmp ${gcc_version} 4.6] < 0} {
-                    set libgccs "path:lib/libgcc/libgcc_s.1.dylib:libgcc port:libgcc7 port:libgcc6 port:libgcc45"
+                    set libgccs "path:lib/libgcc/libgcc_s.1.dylib:libgcc port:libgcc45"
                 } elseif {[vercmp ${gcc_version} 7] < 0} {
-                    set libgccs "path:lib/libgcc/libgcc_s.1.dylib:libgcc port:libgcc7 port:libgcc6"
+                    set libgccs "path:lib/libgcc/libgcc_s.1.dylib:libgcc port:libgcc6"
                 } elseif {[vercmp ${gcc_version} 8] < 0} {
                     set libgccs "path:lib/libgcc/libgcc_s.1.dylib:libgcc port:libgcc7"
+                } elseif {[vercmp ${gcc_version} 9] < 0} {
+                    set libgccs "path:lib/libgcc/libgcc_s.1.dylib:libgcc port:libgcc8"
                 } else {
                     set libgccs "path:lib/libgcc/libgcc_s.1.dylib:libgcc"
                 }
             }
-            ui_debug "Adding depends_build port:$compiler_port"
-            depends_build-delete port:$compiler_port
-            depends_build-append port:$compiler_port
             foreach libgcc_dep $libgccs {
                 ui_debug "Adding depends_lib $libgcc_dep"
                 depends_lib-delete $libgcc_dep
                 depends_lib-append $libgcc_dep
             }
-        } elseif {[regexp {^macports-clang(?:-(\d+\.\d+))$} $compiler -> clang_version]} {
+        } elseif {[regexp {^macports-clang(?:-(\d+(?:\.\d+)?))$} $compiler -> clang_version]} {
             if {[option configure.cxx_stdlib] eq "macports-libstdc++"} {
                 # see https://trac.macports.org/ticket/54766
                 ui_debug "Adding depends_lib path:lib/libgcc/libgcc_s.1.dylib:libgcc"
                 depends_lib-delete "path:lib/libgcc/libgcc_s.1.dylib:libgcc"
                 depends_lib-append "path:lib/libgcc/libgcc_s.1.dylib:libgcc"
-            } elseif {[option configure.cxx_stdlib] eq "libc++"} {
-                if {${os.major} < 11 } {
-                    # libc++ does not exist on these systems
-                    ui_debug "Adding depends_lib libcxx"
-                    depends_lib-delete "port:libcxx"
-                    depends_lib-append "port:libcxx"
-                }
+            } elseif {[option configure.cxx_stdlib] eq "libc++" && ${os.major} < 11} {
+                # libc++ does not exist on these systems
+                ui_debug "Adding depends_lib libcxx"
+                depends_lib-delete "port:libcxx"
+                depends_lib-append "port:libcxx"
+            }
+            if {[option compiler.openmp_version] ne ""} {
+                ui_debug "Adding depends_lib port:libomp"
+                depends_lib-delete "port:libomp"
+                depends_lib-append "port:libomp"
             }
         }
     }
@@ -1402,32 +1652,34 @@ proc portconfigure::configure_main {args} {
         global configure.${flags} configure.universal_${flags}
     }
 
+    set callback [list "-callback" portprogress::target_progress_callback]
+
     if {[tbool use_autoreconf]} {
-        if {[catch {command_exec autoreconf} result]} {
+        if {[catch {command_exec {*}${callback} autoreconf} result]} {
             return -code error "[format [msgcat::mc "%s failure: %s"] autoreconf $result]"
         }
     }
 
     if {[tbool use_automake]} {
-        if {[catch {command_exec automake} result]} {
+        if {[catch {command_exec {*}${callback} automake} result]} {
             return -code error "[format [msgcat::mc "%s failure: %s"] automake $result]"
         }
     }
 
     if {[tbool use_autoconf]} {
-        if {[catch {command_exec autoconf} result]} {
+        if {[catch {command_exec {*}${callback} autoconf} result]} {
             return -code error "[format [msgcat::mc "%s failure: %s"] autoconf $result]"
         }
     }
 
     if {[tbool use_xmkmf]} {
         parse_environment xmkmf
-        if {[catch {command_exec xmkmf} result]} {
+        if {[catch {command_exec {*}${callback} xmkmf} result]} {
             return -code error "[format [msgcat::mc "%s failure: %s"] xmkmf $result]"
         }
 
         parse_environment xmkmf
-        if {[catch {command_exec "cd ${worksrcpath} && make Makefiles" -varprefix xmkmf} result]} {
+        if {[catch {command_exec {*}${callback} "cd ${worksrcpath} && make Makefiles" -varprefix xmkmf} result]} {
             return -code error "[format [msgcat::mc "%s failure: %s"] "make Makefiles" $result]"
         }
     } elseif {[tbool use_configure]} {
@@ -1484,7 +1736,7 @@ proc portconfigure::configure_main {args} {
         }
 
         # add SDK flags if cross-compiling (or universal on ppc tiger)
-        if {${configure.sdkroot} ne ""} {
+        if {${configure.sdkroot} ne "" && ![option compiler.limit_flags]} {
             foreach env_var {CPPFLAGS CFLAGS CXXFLAGS OBJCFLAGS OBJCXXFLAGS} {
                 append_to_environment_value configure $env_var -isysroot${configure.sdkroot}
             }
@@ -1517,13 +1769,92 @@ proc portconfigure::configure_main {args} {
         }
 
         # Execute the command (with the new environment).
-        if {[catch {command_exec configure} result]} {
-            global configure.dir
-            if {[file exists ${configure.dir}/config.log]} {
-                ui_error "[format [msgcat::mc "Failed to configure %s, consult %s/config.log"] [option subport] ${configure.dir}]"
+        if {[catch {command_exec {*}${callback} configure} result]} {
+            global configure.dir build.dir
+            foreach error_log [list ${configure.dir}/config.log ${configure.dir}/CMakeFiles/CMakeError.log ${build.dir}/meson-logs/meson-log.txt] {
+                if {[file exists ${error_log}]} {
+                    ui_error "[format [msgcat::mc "Failed to configure %s: consult %s"] [option subport] ${error_log}]"
+                }
             }
             return -code error "[format [msgcat::mc "%s failure: %s"] configure $result]"
         }
     }
     return 0
+}
+
+options configure.checks.implicit_function_declaration \
+        configure.checks.implicit_function_declaration.whitelist
+default configure.checks.implicit_function_declaration yes
+default configure.checks.implicit_function_declaration.whitelist {[portconfigure::load_implicit_function_declaration_whitelist ${configure.sdk_version}]}
+
+proc portconfigure::check_implicit_function_declarations {} {
+    global \
+        workpath \
+        configure.checks.implicit_function_declaration.whitelist
+
+    # Map from function name to config.log that used it without declaration
+    array set undeclared_functions {}
+
+    fs-traverse -tails file [list ${workpath}] {
+        if {[file tail $file] in [list config.log CMakeError.log meson-log.txt] && [file isfile [file join ${workpath} $file]]} {
+            # We could do the searching ourselves, but using a tool optimized for this purpose is likely much faster
+            # than using Tcl.
+            #
+            # Using /usr/bin/fgrep here, so we don't accidentally pick up a macports-installed grep which might
+            # currently not be runnable due to a missing library.
+            set args [list "/usr/bin/fgrep" "--" "-Wimplicit-function-declaration"]
+            lappend args [file join ${workpath} $file]
+
+            if {![catch {set result [exec -- {*}$args]}]} {
+                foreach line [split $result "\n"] {
+                    if {[regexp -- "(?:implicit declaration of function|implicitly declaring library function) '(\[^']+)'" $line -> function]} {
+                        set is_whitelisted no
+                        foreach whitelisted ${configure.checks.implicit_function_declaration.whitelist} {
+                            if {[string match -nocase $whitelisted $function]} {
+                                set is_whitelisted yes
+                                break
+                            }
+                        }
+                        if {!$is_whitelisted} {
+                            ::struct::set include undeclared_functions($function) $file
+                        } else {
+                            ui_debug [format "Ignoring implicit declaration of function '%s' because it is whitelisted" $function]
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if {[array size undeclared_functions] > 0} {
+        ui_warn "Configuration logfiles contain indications of -Wimplicit-function-declaration; check that features were not accidentally disabled:"
+        foreach {function files} [array get undeclared_functions] {
+            ui_msg [format "  %s: found in %s" $function [join $files ", "]]
+        }
+    }
+}
+
+proc portconfigure::load_implicit_function_declaration_whitelist {sdk_version} {
+    set whitelist {}
+
+    set whitelist_file [getdefaultportresourcepath "port1.0/checks/implicit_function_declaration/macosx${sdk_version}.sdk.list"]
+    if {[file exists $whitelist_file]} {
+        set fd [open $whitelist_file r]
+        while {[gets $fd whitelist_entry] >= 0} {
+            lappend whitelist $whitelist_entry
+        }
+        close $fd
+    }
+
+    return $whitelist
+}
+
+proc portconfigure::configure_finish {args} {
+    global \
+        configure.dir \
+        configure.checks.implicit_function_declaration
+
+    if {[file isdirectory ${configure.dir}] && ${configure.checks.implicit_function_declaration}} {
+        portconfigure::check_implicit_function_declarations
+    }
 }

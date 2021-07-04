@@ -133,7 +133,7 @@ proc property_retrieve {ref property} {
 }
 
 # If only one version of the port is installed, this process returns that
-# version's parts.  Otherwise, it lists the versions installed and exists.
+# version's parts.  Otherwise, it lists the versions installed and exits.
 proc installed {{name ""} {version ""}} {
 	global macports::registry.format
 
@@ -446,7 +446,7 @@ proc convert_to_sqlite {} {
 
         lappend proplist date [receipt_flat::property_retrieve $iref date]
         lappend proplist epoch [receipt_flat::property_retrieve $iref epoch]
-        lappend proplist negated_variants [receipt_flat::property_retrieve $iref negated_variants]
+        lappend proplist requested_variants ${ivariants}[receipt_flat::property_retrieve $iref negated_variants]
         lappend proplist requested [receipt_flat::property_retrieve $iref requested]
         lappend proplist os_platform [receipt_flat::property_retrieve $iref os_platform]
         lappend proplist os_major [receipt_flat::property_retrieve $iref os_major]

@@ -62,15 +62,24 @@ proc decode_spec {specifier version revision variants} {
 ## @param [in] force if true, continue even if there are dependents
 proc check_dependents {port force {action "uninstall/deactivate"}} {
     global UI_PREFIX
-    if {[$port state] eq "installed" || [llength [registry::entry imaged [$port name]]] == 1} {
+    set imaged [registry::entry imaged [$port name]]
+    set imaged_len [llength $imaged]
+    #foreach i $imaged {
+    #    if {$i ne $port} {
+    #        registry::entry close $i
+    #    }
+    #}
+    if {[$port state] eq "installed" || $imaged_len == 1} {
         # Check if any installed ports depend on this one
         set deplist [$port dependents]
         if {$action eq "deactivate"} {
-            set active_deplist {}
+            set active_deplist [list]
             # Check if any active ports depend on this one
             foreach p $deplist {
                 if {[$p state] eq "installed"} {
                     lappend active_deplist $p
+                } else {
+                    #registry::entry close $p
                 }
             }
             set deplist $active_deplist
@@ -79,9 +88,10 @@ proc check_dependents {port force {action "uninstall/deactivate"}} {
             ## User Interaction Question
             # ask if user wants to uninstall a port and thereby break its dependents
             if {[info exists macports::ui_options(questions_yesno)] && ![string is true -strict $force]} { 
-                set portulist {}
+                set portulist [list]
                 foreach depport $deplist {
                     lappend portulist [$depport name]@[$depport version]_[$depport revision]
+                    #registry::entry close $depport
                 }
                 ui_msg "Note: It is not recommended to uninstall/deactivate a port that has dependents as it breaks the dependents."
                 set retvalue [$macports::ui_options(questions_yesno) "The following ports will break:" "breakDeps" $portulist {n} 0]
@@ -94,6 +104,7 @@ proc check_dependents {port force {action "uninstall/deactivate"}} {
                 ui_msg "$UI_PREFIX [format [msgcat::mc "Unable to %s %s @%s_%s%s, the following ports depend on it:"] $action [$port name] [$port version] [$port revision] [$port variants]]"
                 foreach depport $deplist {
                     ui_msg "$UI_PREFIX [format [msgcat::mc "	%s @%s_%s%s"] [$depport name] [$depport version] [$depport revision] [$depport variants]]"
+                    #registry::entry close $depport
                 }
             }
             if { [string is true -strict $force] } {

@@ -261,18 +261,15 @@ cron job that makes the code available via rsync. See
 [`jobs/mprsyncup`][mprsyncup] in the macports-infrastructure repository.
 
 
-### Make the Release Available for Pull Request Checks on Travis CI ###
+### Update the branch buildbot uses to generate manpages ###
 
-To make the new release available for testing pull requests on
-[Travis CI](https://travis-ci.org/macports), update the travis-ci branch by
-merging the newly tagged release into it.
-
-    $ git checkout travis-ci
-    $ git merge v2.0.0
-    $ git push origin travis-ci
-
-Verify that the new release has been built and deployed successfully on
-[Travis CI](https://travis-ci.org/macports/macports-base/branches).
+When releasing a new major version, you should update the buildbot's
+[`master.cfg` file][buildbot-master-cfg] so that the single branch scheduler
+for the manpage jobs pulls from that new branch. To do that, look for `'man'
+in config['deploy']`, locate the `util.ChangeFilter` object passed to the
+constructor of `schedulers.SingleBranchScheduler` below that and adjust the
+`branch` parameter to the branch you are releasing. Notify ryandesign@ to have
+this change deployed on the buildbot.
 
 
 ### Add Release Version to Trac ###
@@ -311,8 +308,6 @@ sent/posted to the following places:
         (submitter: ???)
     *   [Twitter][]
         (submitter: raimue@)
-    *   [Google+ Community][Google+]
-        (submitter: raimue@)
     *   (Where else?)
 
 
@@ -330,7 +325,6 @@ outdated ports tree sources.
 [common.inc]: https://github.com/macports/macports-www/blob/master/includes/common.inc
 [configure]: /configure
 [dp_version]: /config/dp_version
-[Google+]: https://plus.google.com/communities/110287630398071712872
 [gpg-user-id]: https://gnupg.org/documentation/manuals/gnupg/Specify-a-User-ID.html
 [installing.xml]: https://github.com/macports/macports-guide/blob/master/guide/xml/installing.xml
 [macports-announce]: mailto:macports-announce@lists.macports.org
@@ -346,5 +340,6 @@ outdated ports tree sources.
 [SourceForge]: http://sourceforge.net/projects/macports
 [Twitter]: http://twitter.com/macports
 [using.xml]: https://github.com/macports/macports-guide/blob/master/guide/xml/using.xml
+[buildbot-master-cfg]: https://github.com/macports/macports-infrastructure/blob/master/buildbot/master.cfg
 
 <!-- vim:set fenc=utf-8 ft=markdown tw=78 et sw=4 sts=4: -->

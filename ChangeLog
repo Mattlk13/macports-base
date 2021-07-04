@@ -2,6 +2,201 @@
 # This is a log of major user-visible changes in each MacPorts release.
 ###
 
+Release 2.7.1 (2021-05-26 by jmr)
+    - Fixed SQL error when MacPorts was built against the 10.15 SDK but
+      run on 10.14. (#62929, jmr in 0249b3c)
+
+    - Fixed poor performance when installing ports containing tens of
+      thousands of files. (#56793, jmr in fc212a0)
+
+    - Fixed a stack trace being printed after an error occurred if
+      COLUMNS was not set in the environment. (#62935, jmr in 13eeabd)
+
+Release 2.7.0 (2021-05-19 by jmr)
+    - The 'platforms' option now has a default value of 'darwin'.
+      (jmr in d918190)
+
+    - Fixed incorrect versioning assumptions that led to being unable
+      to find the right SDK on Big Sur. (#61866, jmr in 8aa347e)
+
+    - Fixed installer incorrectly setting DISPLAY in the user's shell
+      config on Big Sur. (#61649, jmr in 4ce1e96)
+
+    - Fixed crash in rev-upgrade when MacPorts was built against the
+      macOS 11 SDK and run on 10.15. (#61540, jmr in 23f2aa3)
+
+    - Fixed minimum compiler version selected when C++14 and
+      thread-local storage are required.
+      (#61418, chrstphrchvz in 618d036)
+
+    - Enabled write-ahead logging when using SQLite 3.22.0 and later,
+      and enabled the fullfsync pragma, which should make the database
+      even more resilient against power failures and the like.
+      (#61154, jmr in 5779dbc)
+
+    - Fixed svn fetch with newer Xcode versions that no longer provide
+      svn (but do ship a /usr/bin/svn stub) by always using the
+      subversion port. (#60854, jmr in 4acfd68)
+
+    - Logs now explicitly mention the port's version, revision, and
+      active variants. (#59643, jmr in d484695)
+
+    - Improved error reporting when circular dependencies are present
+      when installing or upgrading ports. (#59289, jmr in cea9833)
+
+    - The universal variant is removed if it is not possible to build
+      for two or more architectures. (#57133, jmr in fcff138)
+
+    - New universal_possible variable can be checked to see if
+      universal building is possible. (jmr in e356e1e)
+
+    - Fixed error when choosing the currently active version when
+      interactively prompted to pick a version by 'port activate'.
+      (#56817, jmr in 5f41bb4)
+
+    - Configuring MacPorts base with --with-no-root-privileges now
+      also defaults to --without-startupitems. (#56743, jmr in a18eb94)
+
+    - Rev-upgrade now makes it more obvious when a port is considered
+      broken because of using the wrong cxx_stdlib.
+      (#56629, jmr in 00a2631)
+
+    - Fixed missing error message when the sync portion of selfupdate
+      fails. (#56549, jmr in 8f4b9e5)
+
+    - When installing a port, the variants that are requested by the
+      user (either on the command line or via variants.conf) are now
+      recorded in the registry in order to distinguish them from
+      default variants chosen by the port. When upgrading, only the
+      requested variants from the previous version, rather than all its
+      active variants, are considered when deciding which variants to
+      request when installing the new version. (#46956, jmr in 19c9339)
+
+    - Added new variables macos_version and macos_version_major, which
+      contain the full macOS version (like 10.15.7) and the major macOS
+      version (like 10.15 or 11), respectively. The macosx_version
+      variable is still available but deprecated.
+      (#56252, jmr in 1916d6f)
+
+    - reclaim: remove everything under build and ccache directories.
+      (#60126, khindenburg in b9fdb847, d08d261f)
+
+    - For various actions, abort if @version specified is not current.
+      (#60454, khindenburg, jmr in 835a7db1, ca071954)
+
+    - Abort when a port includes a nonexistent PortGroup.
+      (#59787, khindenburg in d9139328)
+
+    - Adjust lint --nitpick on patchfiles to allow *.diff or *.patch.
+      (#59695, khindenburg in 5037999e)
+
+    - Display a progress bar when the underlying build system provides the
+      necessary information, which is currently cmake and ninja.
+      (#15939, landonf in da3524e)
+
+    - Support compressed web pages for livecheck.
+      (#55011, dgilman in 8c41ca7, d741f0c)
+
+    - Added configure.sysroot variable, which is set to either
+      ${configure.sdkroot} if an SDK is being used, or "/" if not.
+      (#59798, jmr in 8d76ba6)
+
+Release 2.6.4 (2020-11-14 by jmr)
+    - Fixed incorrectly requiring a full Xcode installation when
+      building all ports on Big Sur. (#61435, jmr in d58b124)
+
+    - Allow building ports for x86_64 on arm64 systems if they don't
+      support arm64. (#61430, jmr in 94f428e)
+
+    - Disabled building the MacPorts SQLite extension by default, since
+      the system's SQLite on Big Sur no longer supports extensions. Use
+      the new macports.sqlext port, which has a dependency on MacPorts'
+      sqlite3 port, to install it. (toby in 4664a4a)
+
+    - Fixed calculation of dependencies of up-to-date ports during
+      upgrade when different variants are specified but
+      --enforce-variants is not used. (jmr in 81979e5)
+
+    - Rev-upgrade no longer warns about libraries that are present only
+      in the shared cache, since this is normal as of Big Sur.
+      (jeremyhu in 601864d)
+
+    - Fixed incorrect output of 'port info --depends' when used with
+      multiple ports. (#61083, ryandesign in a7cf423)
+
+    - Fixed incorrect warning that the SDK for the current OS version
+      is missing, when configure.sdk_version has been cleared by the
+      Portfile. (jmr in 8402cf8)
+
+    - Fixed some operations involving fs-traverse failing with paths
+      containing whitespace. (ryandesign in 52609c9)
+
+    - Various changes to support arm64.
+      (ryandesign, toby in c8ddc79, bfc0544, 7ccf5a2)
+
+    - No longer error out immediately when an appropriate SDK cannot
+      be found, which prevented even actions like 'port info' from
+      working in that situation. (jmr in 5764fd9)
+
+Release 2.6.3 (2020-07-19 by jmr)
+    - Correct macports-clang c++11+ compiler selection with non-libc++
+      installations. (kencu in 3ea1fb4)
+
+    - Avoid problems with trace mode on modern macOS.
+      (#60702, saagarjha, cal in d96e5a85a)
+
+    - Added some basic support for Apple Silicon.
+      (jeremyhu, jmr in 6eaa8d5, 901eb21, 01afdbb)
+
+    - Fixed an issue where post-extract ran with elevated privileges when
+      adduser was used in a Portfile. (#50918, cal in ac1a9b099)
+
+    - Fixed cases where a proper error message was not displayed when curl
+      failed. (#60581, cal in f535c26)
+
+    - Reduced the number of processes spawned when pinging mirror sites.
+      (ryandesign in cee74bb)
+
+    - Support new naming scheme used starting with macports-clang-10 in
+      configure.compiler. (jonesc in 5c3f571)
+
+    - Fixed dmg and mdmg targets on 10.15+. (#59697, jmr in 0459cb1)
+
+    - Ensure archive paths are correctly quoted when extracting.
+      (#60365, jmr in 8a088c3)
+
+Release 2.6.2 (2019-10-20 by jmr)
+    - Added support for zsh to the pkg installer's PATH setup code.
+      (cal in f9a3b2d)
+
+    - Allow individual ports to change prefix without disabling binary
+      distribution for them. (jmr in d840f25)
+
+    - Added warning to install the Command Line Tools when using
+      Xcode 10 or later and headers corresponding to the current OS
+      version are not available. (jmr in 8a7d604)
+
+    - Always try macports-gcc on ppc systems if system compilers are
+      blacklisted. (jmr in 42b36f4)
+
+Release 2.6.1 (2019-10-03 by jmr)
+    - Fixed error on older OS versions that use apple-gcc-4.2.
+      (#59089, jmr in a3a71b5)
+
+    - Fixed 'port diagnose' check for command line tools on some older
+      OS versions. (kencu in c2a1872)
+
+    - Silenced some SDK-related warnings that were repeatedly printed
+      when using Xcode 11. (jmr in 73ee4b4)
+
+    - Improved performance with Xcode 11. (jmr in 3768efd)
+
+    - Fixed C++ compiler selection with Xcode 4.x on Snow Leopard.
+      (kencu in 37c7cfe)
+
+    - Fixed 'port info --depends' printing the wrong set of fields.
+      (#59149, jmr in e62716c)
+
 Release 2.6.0 (2019-09-21 by jmr)
     - Extend the touch command to take a -W directory parameter.
       (#53730, khindenburg in a90c4b29)
@@ -18,7 +213,7 @@ Release 2.6.0 (2019-09-21 by jmr)
     - Overhauled compiler selection logic. Ports can now specify that
       they require a particular C or C++ standard (e.g. C++11),
       Fortran, OpenMP, MPI, or TLS, and a suitable compiler will be
-      chosen based on all these criteria. (mcalhoun in 5e17a69)
+      chosen based on all these criteria. (#55139, mcalhoun in 5e17a69)
 
     - Rewrote handling of *.env options. This should fix cases where
       environment variables were not being set because the old code

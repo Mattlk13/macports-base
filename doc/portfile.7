@@ -386,6 +386,19 @@ files for use by
 .br
 .Sy Example:
 .Dl use_automake yes
+.It Ic use_autoreconf
+If set to yes, run the
+.Cm autoreconf
+target to generate GNU build system files.
+.br
+.Sy Type:
+.Em optional
+.br
+.Sy Default:
+.Em no
+.br
+.Sy Example:
+.Dl use_autoreconf yes
 .It Ic use_autoconf
 If set to yes, run the
 .Cm autoconf
@@ -2384,6 +2397,8 @@ before working.
 .Ic fs-traverse
 .Op Fl depth
 .Op Fl ignoreErrors
+.Op Fl tails
+.Op Fl -
 .Ar varname
 .Ar target-list
 .Ar body
@@ -2393,6 +2408,8 @@ Traverse the filesystem hierarchy rooted in each element of
 and execute
 .Ar body
 for each found file/directory.
+.Va target-list
+should always be specified as a list even if contains only one item.
 .Va varname
 is set to the path of the file/directory.
 If
@@ -2417,6 +2434,17 @@ as it will be processed after its children.
 Causes
 .Ic fs-traverse
 to ignore any permissions/read errors encountered during processing.
+.It Fl tails
+Returns paths relative to the top-level directory being traversed, as opposed to
+absolute paths. When
+.Fl tails
+is used
+.Va target-list
+can contain only one item.
+.It Fl --
+Ignores any further flags and interprets the next parameter as
+.Va varname
+even if it begins with a dash.
 .El
 .Pp
 If
@@ -2578,6 +2606,16 @@ from the
 .br
 .Sy Example:
 .Dl configure.args-delete --with-gnomedb
+.It Va variable Ns - Ns Ic replace Ar old_item new_item
+Replace
+.Ar old_item
+with
+.Ar new_item
+in the
+.Va variable .
+.br
+.Sy Example:
+.Dl configure.args-replace --with-gnomedb --without-gnomedb
 .It Ic readdir Ar directory
 Return the list of elements in a
 .Ar directory ,

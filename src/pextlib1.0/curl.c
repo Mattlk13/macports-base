@@ -59,6 +59,12 @@
 #define _CURL_MINIMUM_XFER_TIMEOUT	((long)(60))		/* 1 minute */
 #define _CURL_MINIMUM_PROGRESS_INTERVAL ((double)(0.2)) /* 0.2 seconds */
 
+#if defined CURLOPT_ACCEPT_ENCODING
+#define _CURL_ENCODING CURLOPT_ACCEPT_ENCODING
+#else
+#define _CURL_ENCODING CURLOPT_ENCODING
+#endif
+
 /* ========================================================================= **
  * Definitions
  * ========================================================================= */
@@ -150,7 +156,7 @@ SetResultFromCurlMErrorCode(Tcl_Interp *interp, CURLMcode inErrorCode)
 /**
  * curl fetch subcommand entry point.
  *
- * syntax: curl fetch [--disable-epsv] [--ignore-ssl-cert] [--remote-time] [-u userpass] [--effective-url lasturlvar] [--progress "builtin"|callback] url filename
+ * syntax: curl fetch [--disable-epsv] [--ignore-ssl-cert] [--remote-time] [-u userpass] [--effective-url lasturlvar] [--progress "builtin"|callback] [--enable-compression] url filename
  *
  * @param interp		current interpreter
  * @param objc			number of parameters
@@ -163,6 +169,11 @@ CurlFetchCmd(Tcl_Interp* interp, int objc, Tcl_Obj* CONST objv[])
 	bool handleAdded = false;
 	FILE* theFile = NULL;
 	char theErrorString[CURL_ERROR_SIZE];
+
+	/* Always 0-initialize the error string, since older curl versions may not
+	 * initialize the error string buffer at all. See
+	 * https://trac.macports.org/ticket/60581. */
+	theErrorString[0] = '\0';
 
 	do {
 		int noprogress = 1;
@@ -191,6 +202,7 @@ CurlFetchCmd(Tcl_Interp* interp, int objc, Tcl_Obj* CONST objv[])
 		struct curl_slist *headers = NULL;
 		struct CURLMsg *info = NULL;
 		int running; /* number of running transfers */
+		char* acceptEncoding = NULL;
 
 		/* we might have options and then the url and the file */
 		/* let's process the options first */
@@ -247,14 +259,14 @@ CurlFetchCmd(Tcl_Interp* interp, int objc, Tcl_Obj* CONST objv[])
 				/* check we also have the parameter */
 				if (optioncrsr < lastoption) {
 					optioncrsr++;
-					if ( numHTTPHeaders < MAXHTTPHEADERS ) {
-					  httpHeaders[numHTTPHeaders++] = Tcl_GetString(objv[optioncrsr]);
+					if (numHTTPHeaders < MAXHTTPHEADERS) {
+						httpHeaders[numHTTPHeaders++] = Tcl_GetString(objv[optioncrsr]);
 					} else {
-					  Tcl_SetResult(interp,
-					    "curl fetch: Too many --append-http-header options",
-					    TCL_STATIC);
-					  theResult = TCL_ERROR;
-					  break;
+						Tcl_SetResult(interp,
+							"curl fetch: Too many --append-http-header options",
+							TCL_STATIC);
+						theResult = TCL_ERROR;
+						break;
 					}
 				} else {
 					Tcl_SetResult(interp,
@@ -276,6 +288,8 @@ CurlFetchCmd(Tcl_Interp* interp, int objc, Tcl_Obj* CONST objv[])
 					theResult = TCL_ERROR;
 					break;
 				}
+			} else if (strcmp(theOption, "--enable-compression") == 0) {
+				acceptEncoding = "";
 			} else {
 				Tcl_ResetResult(interp);
 				Tcl_AppendResult(interp, "curl fetch: unknown option ", theOption, NULL);
@@ -487,11 +501,24 @@ CurlFetchCmd(Tcl_Interp* interp, int objc, Tcl_Obj* CONST objv[])
 			}
 		}
 
+		/* a CURLOPT_ACCEPT_ENCODING of "" means to let cURL write the
+		 * Accept-Encoding header for you, based on what the library
+		 * was compiled to support.
+		 * A value of NULL disables all attemps at decompressing responses.
+		*/
+#ifdef _CURL_ENCODING
+		theCurlCode = curl_easy_setopt(theHandle, _CURL_ENCODING, acceptEncoding);
+		if (theCurlCode != CURLE_OK) {
+			theResult = SetResultFromCurlErrorCode(interp, theCurlCode);
+			break;
+		}
+#endif
+
 		/* Clear the Pragma: no-cache header */
 		headers = curl_slist_append(headers, "Pragma:");
 		/* Append any optional headers */
- 		for ( int iH = 0; iH < numHTTPHeaders; ++iH ) {
-		  headers = curl_slist_append(headers, httpHeaders[iH]);
+		for (int iH = 0; iH < numHTTPHeaders; ++iH) {
+			headers = curl_slist_append(headers, httpHeaders[iH]);
 		}
 		theCurlCode = curl_easy_setopt(theHandle, CURLOPT_HTTPHEADER, headers);
 		if (theCurlCode != CURLE_OK) {
@@ -623,8 +650,21 @@ CurlFetchCmd(Tcl_Interp* interp, int objc, Tcl_Obj* CONST objv[])
 		}
 		
 		if (info->data.result != CURLE_OK) {
-			/* execution failed, use the error string */
-			Tcl_SetResult(interp, theErrorString, TCL_VOLATILE);
+			/* execution failed, use the error string if it is set */
+			if (theErrorString[0] != '\0') {
+				Tcl_SetResult(interp, theErrorString, TCL_VOLATILE);
+			} else {
+				/* When the error buffer does not hold useful information,
+				 * generate our own message. Use a larger buffer since we add
+				 * a significant amount of text. */
+				char errbuf[256 + CURL_ERROR_SIZE];
+				snprintf(errbuf, sizeof(errbuf),
+					"curl_multi_info_read() returned {.msg = CURLMSG_DONE, "
+					".data.result = %d (!= CURLE_OK)}, but the error buffer "
+					"is not set. curl_easy_strerror(.data.result): %s",
+					info->data.result, curl_easy_strerror(info->data.result));
+				Tcl_SetResult(interp, errbuf, TCL_VOLATILE);
+			}
 			theResult = TCL_ERROR;
 			break;
 		}

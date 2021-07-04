@@ -88,7 +88,7 @@ proc activate {name {version ""} {revision ""} {variants 0} {optionslist ""}} {
     if {[info exists options(ports_activate_no-exec)]} {
         set noexec $options(ports_activate_no-exec)
     }
-    set rename_list {}
+    set rename_list [list]
     if {[info exists options(portactivate_rename_files)]} {
         set rename_list $options(portactivate_rename_files)
     }
@@ -109,34 +109,50 @@ proc activate {name {version ""} {revision ""} {variants 0} {optionslist ""}} {
         set specifier "${version}_${revision}${variants}"
         set location [$requested location]
 
+        if {[$requested state] eq "installed"} {
+            ui_info "${name} @${specifier} is already active."
+            #registry::entry close $requested
+            return
+        }
+
+        # this shouldn't be possible
+        if { [$requested installtype] ne "image" } {
+            #registry::entry close $requested
+            return -code error "Image error: ${name} @${specifier} not installed as an image."
+        }
+        if {![::file isfile $location]} {
+            #registry::entry close $requested
+            return -code error "Image error: Can't find image file $location"
+        }
+
         # if another version of this port is active, deactivate it first
         set current [registry::entry installed $name]
         foreach i $current {
             if { $specifier ne "[$i version]_[$i revision][$i variants]" } {
                 lappend todeactivate $i
+            } else {
+                #registry::entry close $i
+            }
+        }
+    }
+
+    try {
+        foreach a $todeactivate {
+            if {$noexec || ![registry::run_target $a deactivate [list ports_nodepcheck 1]]} {
+                deactivate $name [$a version] [$a revision] [$a variants] [list ports_nodepcheck 1]
             }
         }
 
-        # this shouldn't be possible
-        if { [$requested installtype] ne "image" } {
-            return -code error "Image error: ${name} @${specifier} not installed as an image."
-        }
-        if {![::file isfile $location]} {
-            return -code error "Image error: Can't find image file $location"
-        }
-        if {[$requested state] eq "installed"} {
-            return -code error "Image error: ${name} @${specifier} is already active."
+        ui_msg "$UI_PREFIX [format [msgcat::mc "Activating %s @%s"] $name $specifier]"
+
+        _activate_contents $requested $rename_list
+    } finally {
+        #registry::entry close $requested
+        foreach a $todeactivate {
+            # may have been closed by deactivate
+            #catch {registry::entry close $a}
         }
     }
-    foreach a $todeactivate {
-        if {$noexec || ![registry::run_target $a deactivate [list ports_nodepcheck 1]]} {
-            deactivate $name [$a version] [$a revision] [$a variants] [list ports_nodepcheck 1]
-        }
-    }
-
-    ui_msg "$UI_PREFIX [format [msgcat::mc "Activating %s @%s"] $name $specifier]"
-
-    _activate_contents $requested $rename_list
 }
 
 # takes a composite version spec rather than separate version,revision,variants
@@ -173,7 +189,23 @@ proc deactivate {name {version ""} {revision ""} {variants 0} {optionslist ""}} 
     if { [llength $ilist] == 1 } {
         set requested [lindex $ilist 0]
     } else {
-        throw registry::image-error "Image error: port ${name} is not active."
+        set ilist [_check_registry $name $version $revision $variants 1]
+        if {[llength $ilist] > 0} {
+            ui_info "port ${name} is already inactive"
+            #foreach i $ilist {
+            #    registry::entry close $i
+            #}
+            return
+        } else {
+            set v ""
+            if {$version ne ""} {
+                set v " @${version}"
+                if {$revision ne ""} {
+                    append v _${revision}${variants}
+                }
+            }
+            throw registry::image-error "Image error: port ${name}${v} is not active."
+        }
     }
     # set name again since the one we were passed may not have had the correct case
     set name [$requested name]
@@ -185,30 +217,57 @@ proc deactivate {name {version ""} {revision ""} {variants 0} {optionslist ""}} 
         if {$revision ne ""} {
             append v _${revision}${variants}
         }
+        set ilist [_check_registry $name $version $revision $variants 1]
+        foreach inact $ilist {
+            if {$revision ne ""} {
+                set thisv [$inact version]_[$inact revision][$inact variants]
+            } else {
+                set thisv [$inact version]
+            }
+            if {$v eq $thisv} {
+                ui_info "port ${name} @${thisv} is already inactive"
+                #registry::entry close $requested
+                #foreach inact $ilist {
+                #    registry::entry close $inact
+                #}
+                return
+            }
+        }
+        #registry::entry close $requested
+        #foreach inact $ilist {
+        #    registry::entry close $inact
+        #}
         return -code error "Active version of $name is not $v but ${specifier}."
     }
 
     if { [$requested installtype] ne "image" } {
+        #registry::entry close $requested
         return -code error "Image error: ${name} @${specifier} not installed as an image."
     }
     # this shouldn't be possible
     if { [$requested state] ne "installed" } {
+        #registry::entry close $requested
         return -code error "Image error: ${name} @${specifier} is not active."
     }
-	
+
     if {![info exists options(ports_nodepcheck)] || ![string is true -strict $options(ports_nodepcheck)]} {
         set retvalue [registry::check_dependents $requested $force "deactivate"]
         if {$retvalue eq "quit"} {
+            #registry::entry close $requested
             return
         }
     }
 
     ui_msg "$UI_PREFIX [format [msgcat::mc "Deactivating %s @%s"] $name $specifier]"
-	
-    _deactivate_contents $requested [$requested files] $force
+
+    try {
+        _deactivate_contents $requested [$requested files] $force
+    } finally {
+        #registry::entry close $requested
+    }
 }
 
-proc _check_registry {name version revision variants} {
+proc _check_registry {name version revision variants {return_all 0}} {
     global UI_PREFIX
 
     set searchkeys $name
@@ -224,9 +283,12 @@ proc _check_registry {name version revision variants} {
         }
     }
     set ilist [registry::entry imaged {*}$searchkeys]
+    if {$return_all} {
+        return $ilist
+    }
 
     if { [llength $ilist] > 1 } {
-        set portilist {}
+        set portilist [list]
         set msg "The following versions of $name are currently installed:"
         if {[macports::ui_isset ports_noninteractive]} {
             ui_msg "$UI_PREFIX [msgcat::mc $msg]"
@@ -244,9 +306,18 @@ proc _check_registry {name version revision variants} {
             }
         }
         if {[info exists macports::ui_options(questions_singlechoice)]} {
-            set retvalue [$macports::ui_options(questions_singlechoice) $msg "Choice_Q1" $portilist]
-            return [lindex $ilist $retvalue]
+            set retindex [$macports::ui_options(questions_singlechoice) $msg "Choice_Q1" $portilist]
+            set retvalue [lindex $ilist $retindex]
+            #foreach i $ilist {
+            #    if {$i ne $retvalue} {
+            #        registry::entry close $i
+            #    }
+            #}
+            return $retvalue
         }
+        #foreach i $ilist {
+        #    registry::entry close $i
+        #}
         throw registry::invalid "Registry error: Please specify the full version as recorded in the port registry."
     } elseif { [llength $ilist] == 1 } {
         return [lindex $ilist 0]
@@ -336,13 +407,13 @@ proc extract_archive_to_tmpdir {location} {
                         set gzip "gzip"
                         if {[catch {set gzip [macports::findBinary $gzip ${macports::autoconf::gzip_path}]} errmsg] == 0} {
                             ui_debug "Using $gzip"
-                            set unarchive.pipe_cmd "$gzip -d -c ${location} |"
+                            set unarchive.pipe_cmd "$gzip -d -c [macports::shellescape ${location}] |"
                         } else {
                             ui_debug $errmsg
                             throw MACPORTS "No '$gzip' was found on this system!"
                         }
                     } else {
-                        set unarchive.args "-f ${location} ."
+                        set unarchive.args "-f [macports::shellescape ${location}] ."
                     }
                 } else {
                     ui_debug $errmsg
@@ -353,7 +424,10 @@ proc extract_archive_to_tmpdir {location} {
                 global macports::hfscompression
                 # Opportunistic HFS compression. bsdtar will automatically
                 # disable this if filesystem does not support compression.
-                if {${macports::hfscompression} &&
+                # Don't use if not running as root, due to bugs:
+                # The system bsdtar on 10.15 suffers from https://github.com/libarchive/libarchive/issues/497
+                # Later versions fixed that problem but another remains: https://github.com/libarchive/libarchive/issues/1415 
+                if {${macports::hfscompression} && [getuid] == 0 &&
                         ![catch {macports::binaryInPath bsdtar}] &&
                         ![catch {exec bsdtar -x --hfsCompression < /dev/null >& /dev/null}]} {
                     ui_debug "Using bsdtar with HFS+ compression (if valid)"
@@ -394,13 +468,13 @@ proc extract_archive_to_tmpdir {location} {
                     }
                     if {[catch {set gzip [macports::findBinary $gzip $hint]} errmsg] == 0} {
                         ui_debug "Using $gzip"
-                        set unarchive.pipe_cmd "$gzip -d -c ${location} |"
+                        set unarchive.pipe_cmd "$gzip -d -c [macports::shellescape ${location}] |"
                     } else {
                         ui_debug $errmsg
                         throw MACPORTS "No '$gzip' was found on this system!"
                     }
                 } else {
-                    set unarchive.args "${location}"
+                    set unarchive.args [macports::shellescape ${location}]
                 }
             }
             xar {
@@ -409,7 +483,7 @@ proc extract_archive_to_tmpdir {location} {
                     ui_debug "Using $xar"
                     set unarchive.cmd "$xar"
                     set unarchive.pre_args {-xvpf}
-                    set unarchive.args "${location}"
+                    set unarchive.args [macports::shellescape ${location}]
                 } else {
                     ui_debug $errmsg
                     throw MACPORTS "No '$xar' was found on this system!"
@@ -425,7 +499,7 @@ proc extract_archive_to_tmpdir {location} {
                     } else {
                         set unarchive.pre_args {-o}
                     }
-                    set unarchive.args "${location} -d ."
+                    set unarchive.args "[macports::shellescape ${location}] -d ."
                 } else {
                     ui_debug $errmsg
                     throw MACPORTS "No '$unzip' was found on this system!"
@@ -520,11 +594,17 @@ proc _activate_contents {port {rename_list {}}} {
                         # we find any files that already exist, or have entries in
                         # the registry
                         if { $owner ne {} && $owner ne $port } {
-                            throw registry::image-error "Image error: $file is being used by the active [$owner name] port.  Please deactivate this port first, or use 'port -f activate [$port name]' to force the activation."
+                            set msg "Image error: $file is being used by the active [$owner name] port.  Please deactivate this port first, or use 'port -f activate [$port name]' to force the activation."
+                            #registry::entry close $owner
+                            throw registry::image-error $msg
                         } elseif { $owner eq {} && ![catch {::file type $file}] } {
-                            throw registry::image-error "Image error: $file already exists and does not belong to a registered port.  Unable to activate port [$port name]. Use 'port -f activate [$port name]' to force the activation."
+                            set msg "Image error: $file already exists and does not belong to a registered port.  Unable to activate port [$port name]. Use 'port -f activate [$port name]' to force the activation."
+                            throw registry::image-error $msg
                         }
                     }
+                    #if {$owner ne {}} {
+                    #    registry::entry close $owner
+                    #}
                 }
 
                 # Split out the filename's subpaths and add them to the
@@ -560,7 +640,7 @@ proc _activate_contents {port {rename_list {}}} {
         # debug output of activate make more sense.
         set files [lsort -increasing -unique $files]
         # handle files that are to be renamed
-        set confirmed_rename_list {}
+        set confirmed_rename_list [list]
         foreach {src dest} $rename_list {
             set index [lsearch -exact -sorted $files $src]
             if {$index != -1} {
@@ -568,7 +648,7 @@ proc _activate_contents {port {rename_list {}}} {
                 lappend confirmed_rename_list $src $dest
             }
         }
-        set rollback_filelist {}
+        set rollback_filelist [list]
 
         registry::write {
             # Activate it, and catch errors so we can roll-back
@@ -647,11 +727,14 @@ proc _activate_contents {port {rename_list {}}} {
             signal set $osignals
         }
 
+        throw
+    } finally {
+        #foreach entry [array names todeactivate] {
+        #    registry::entry close $entry
+        #}
         # remove temp image dir
         ::file delete -force $extracted_dir
-        throw
     }
-    ::file delete -force $extracted_dir
 }
 
 # These directories should not be removed during deactivation even if they are empty.

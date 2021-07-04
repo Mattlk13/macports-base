@@ -368,33 +368,55 @@ proc command_string {command} {
 }
 
 # Given a command name, execute it with the options.
-# command_exec command [-notty] [-varprefix variable_prefix] [command_prefix [command_suffix]]
+# command_exec [-notty] [-callback proc] [-varprefix variable_prefix] command [command_prefix [command_suffix]]
 # command           name of the command
 # variable_prefix   name of the variable prefix to use (defaults to command)
 # command_prefix    additional command prefix (typically pipe command)
 # command_suffix    additional command suffix (typically redirection)
-proc command_exec {command args} {
-    set varprefix "${command}"
+proc command_exec {args} {
+    set callback ""
     set notty ""
     set command_prefix ""
     set command_suffix ""
 
-    if {[llength $args] > 0} {
-        if {[lindex $args 0] eq "-notty"} {
-            set notty "-notty"
-            set args [lrange $args 1 end]
-        }
-
-        if {[lindex $args 0] eq "-varprefix"} {
-            set varprefix [lindex $args 1]
-            set args [lrange $args 2 end]
-        }
-
-        if {[llength $args] > 0} {
-            set command_prefix [lindex $args 0]
-            if {[llength $args] > 1} {
-                set command_suffix [lindex $args 1]
+    while {[llength $args] > 0} {
+        switch -glob -- [lindex $args 0] {
+            -notty {
+                set notty "-notty"
+                set args [lrange $args 1 end]
             }
+            -callback {
+                set callback [lrange $args 0 1]
+                set args [lrange $args 2 end]
+            }
+            -varprefix {
+                set varprefix [lindex $args 1]
+                set args [lrange $args 2 end]
+            }
+            -* {
+                return -code error "unknown option [lindex $args 0]"
+            }
+            -- {
+                set args [lrange $args 1 end]
+                break
+            }
+            default {
+                break
+            }
+        }
+    }
+
+    if {[llength $args] == 0} {
+        return -code error "Missing command argument"
+    }
+
+    set command [lindex $args 0]
+    set varprefix "${command}"
+
+    if {[llength $args] > 1} {
+        set command_prefix [lindex $args 1]
+        if {[llength $args] > 2} {
+            set command_suffix [lindex $args 2]
         }
     }
 
@@ -417,8 +439,10 @@ proc command_exec {command args} {
     if {[option macosx_deployment_target] ne ""} {
         set ${varprefix}.env_array(MACOSX_DEPLOYMENT_TARGET) [option macosx_deployment_target]
     }
-    set ${varprefix}.env_array(CC_PRINT_OPTIONS) "YES"
-    set ${varprefix}.env_array(CC_PRINT_OPTIONS_FILE) [file join [option workpath] ".CC_PRINT_OPTIONS"]
+    if {[option compiler.log_verbose_output]} {
+        set ${varprefix}.env_array(CC_PRINT_OPTIONS) "YES"
+        set ${varprefix}.env_array(CC_PRINT_OPTIONS_FILE) [file join [option workpath] ".CC_PRINT_OPTIONS"]
+    }
     if {[option compiler.cpath] ne ""} {
         set ${varprefix}.env_array(CPATH) [join [option compiler.cpath] :]
     }
@@ -426,6 +450,9 @@ proc command_exec {command args} {
         set ${varprefix}.env_array(LIBRARY_PATH) [join [option compiler.library_path] :]
     }
     set ${varprefix}.env_array(DEVELOPER_DIR) [option configure.developer_dir]
+    if {[option configure.sdkroot] ne ""} {
+        set ${varprefix}.env_array(SDKROOT) [option configure.sdkroot]
+    }
 
     # Debug that.
     ui_debug "Environment: [environment_array_to_string ${varprefix}.env_array]"
@@ -448,7 +475,7 @@ proc command_exec {command args} {
     # Call the command.
     set fullcmdstring "$command_prefix $cmdstring $command_suffix"
     ui_info "Executing: $fullcmdstring"
-    set code [catch {system {*}$notty {*}$nice $fullcmdstring} result]
+    set code [catch {system {*}$notty {*}$callback {*}$nice $fullcmdstring} result]
     # Save variables in order to re-throw the same error code.
     set errcode $::errorCode
     set errinfo $::errorInfo
@@ -518,7 +545,7 @@ proc handle_option_string {option action args} {
         set {
             set args [join $args]
 
-            set fulllist {}
+            set fulllist [list]
             # args is a list of strings/list
             foreach arg $args {
                 # Strip empty lines at beginning
@@ -686,6 +713,20 @@ proc variant_remove_ditem {name} {
         }
 
         incr item_index
+    }
+}
+
+# variant_delete name
+# completely delete the named variant from the port
+proc variant_delete {name} {
+    variant_remove_ditem $name
+    if {[info exists ::PortInfo(variants)]} {
+        set ::PortInfo(variants) [ldelete $::PortInfo(variants) $name]
+    }
+    if {[info exists ::PortInfo(vinfo)]} {
+        array set vinfo $::PortInfo(vinfo)
+        unset -nocomplain vinfo($name)
+        set ::PortInfo(vinfo) [array get vinfo]
     }
 }
 
@@ -1167,7 +1208,7 @@ proc copy {args} {
 # move
 # Wrapper for file rename that handles case-only renames
 proc move {args} {
-    set options {}
+    set options [list]
     while {[string match "-*" [lindex $args 0]]} {
         set arg [string range [lindex $args 0] 1 end]
         set args [lreplace $args 0 0]
@@ -1316,7 +1357,7 @@ set ports_dry_last_skipped ""
 proc target_run {ditem} {
     global target_state_fd workpath portpath ports_trace PortInfo ports_dryrun \
            ports_dry_last_skipped worksrcpath subport env portdbpath \
-           macosx_version prefix
+           prefix_frozen
     set portname $subport
     set result 0
     set skipped 0
@@ -1446,7 +1487,7 @@ proc target_run {ditem} {
                     }
 
                     # Recursively collect all dependencies from registry for tracing
-                    set deplist {}
+                    set deplist [list]
                     foreach depspec $depends {
                         # Resolve dependencies to actual ports
                         set name [_get_dep_port $depspec]
@@ -1460,7 +1501,7 @@ proc target_run {ditem} {
                     }
 
                     # Add ccache port for access to ${prefix}/bin/ccache binary if it exists
-                    if {[option configure.ccache] && [file exists ${prefix}/bin/ccache]} {
+                    if {[option configure.ccache] && [file exists ${prefix_frozen}/bin/ccache]} {
                         set name [_get_dep_port path:bin/ccache:ccache]
                         lappend deplist $name
                         set deplist [recursive_collect_deps $name $deplist]
@@ -1979,7 +2020,7 @@ proc canonicalize_variants {variants {sign "+"}} {
 }
 
 proc eval_variants {variations} {
-    global all_variants PortInfo requested_variations portvariants negated_variants
+    global all_variants PortInfo requested_variations portvariants requested_variants
     set dlist $all_variants
     upvar $variations upvariations
     set chosen [choose_variants $dlist upvariations]
@@ -1990,8 +2031,6 @@ proc eval_variants {variations} {
     # Check to make sure the requested variations are available with this
     # port, if one is not, warn the user and remove the variant from the
     # array.
-    # Save the originally requested set in requested_variations.
-    array set requested_variations [array get upvariations]
     foreach key [array names upvariations *] {
         if {![info exists PortInfo(variants)] ||
             $key ni $PortInfo(variants)} {
@@ -2045,13 +2084,24 @@ proc eval_variants {variations} {
     set PortInfo(active_variants) $activevariants
     set PortInfo(canonical_active_variants) $portvariants
 
-    # now set the negated variants
+    # Now set the requested variants string, based on the requested_variations
+    # array, but narrowed down to the variants that this port actually has,
+    # as per the chosen and negated lists.
+    set requested_list [list]
+    foreach dvar $chosen {
+        set thevar [ditem_key $dvar provides]
+        if {[info exists requested_variations($thevar)]} {
+            lappend requested_list $thevar "+"
+        }
+    }
     set negated_list [list]
     foreach dvar $negated {
         set thevar [ditem_key $dvar provides]
-        lappend negated_list $thevar "-"
+        if {[info exists requested_variations($thevar)]} {
+            lappend negated_list $thevar "-"
+        }
     }
-    set negated_variants [canonicalize_variants $negated_list "-"]
+    set requested_variants [canonicalize_variants $requested_list "+"][canonicalize_variants $negated_list "-"]
 
     return 0
 }
@@ -2106,14 +2156,19 @@ proc check_variants {target} {
 # add the default universal variant if appropriate
 proc universal_setup {args} {
     if {[variant_exists universal]} {
-        ui_debug "universal variant already exists, so not adding the default one"
+        if {[llength [option configure.universal_archs]] >= 2} {
+            ui_debug "universal variant already exists, so not adding the default one"
+        } else {
+            ui_debug "removing universal variant due to < 2 supported universal_archs"
+            variant_delete universal
+        }
     } elseif {[exists universal_variant] && ![option universal_variant]} {
         ui_debug "universal_variant is false, so not adding the default universal variant"
     } elseif {[exists use_xmkmf] && [option use_xmkmf]} {
         ui_debug "using xmkmf, so not adding the default universal variant"
     } elseif {![exists os.universal_supported] || ![option os.universal_supported]} {
         ui_debug "OS doesn't support universal builds, so not adding the default universal variant"
-    } elseif {[llength [option supported_archs]] == 1} {
+    } elseif {[llength [option configure.universal_archs]] <= 1} {
         ui_debug "only one arch supported, so not adding the default universal variant"
     } elseif {![portconfigure::arch_flag_supported [option configure.compiler] yes]} {
         ui_debug "Compiler doesn't support universal builds, so not adding the default universal variant"
@@ -2299,9 +2354,6 @@ proc adduser {name args} {
         ui_warn "adduser only works when running as root."
         ui_warn "The requested user '$name' was not created."
         return
-    } elseif {[geteuid] != 0} {
-        seteuid 0; setegid 0
-        set escalated 1
     }
 
     set passwd {*}
@@ -2320,6 +2372,11 @@ proc adduser {name args} {
 
     if {[existsuser ${name}] != -1 || [existsuser ${uid}] != -1} {
         return
+    }
+
+    if {[geteuid] != 0} {
+        seteuid 0; setegid 0
+        set escalated 1
     }
 
     if {${os.platform} eq "darwin"} {
@@ -2388,6 +2445,11 @@ proc adduser {name args} {
                     }
                 }
 
+                # drop privileges if they were escalated before
+                if {[info exists escalated]} {
+                    dropPrivileges
+                }
+
                 # and raise an error to abort
                 error "dscl failed to create required user $name."
             }
@@ -2410,9 +2472,6 @@ proc addgroup {name args} {
         ui_warn "addgroup only works when running as root."
         ui_warn "The requested group '$name' was not created."
         return
-    } elseif {[geteuid] != 0} {
-        seteuid 0; setegid 0
-        set escalated 1
     }
 
     set gid [nextgid]
@@ -2429,6 +2488,11 @@ proc addgroup {name args} {
 
     if {[existsgroup ${name}] != -1 || [existsgroup ${gid}] != -1} {
         return
+    }
+
+    if {[geteuid] != 0} {
+        seteuid 0; setegid 0
+        set escalated 1
     }
 
     if {${os.platform} eq "darwin"} {
@@ -2487,6 +2551,10 @@ proc addgroup {name args} {
                     }
                 }
 
+                if {[info exists escalated]} {
+                    dropPrivileges
+                }
+
                 # and raise an error to abort
                 error "dscl failed to create required group $name."
             }
@@ -2531,7 +2599,7 @@ proc set_ui_prefix {} {
 
 # Use a specified group/version.
 proc PortGroup {group version} {
-    global porturl PortInfo _portgroup_search_dirs
+    global porturl PortInfo _portgroup_search_dirs subport
 
     if {[info exists _portgroup_search_dirs]} {
         foreach dir $_portgroup_search_dirs {
@@ -2552,8 +2620,8 @@ proc PortGroup {group version} {
         uplevel "source $groupFile"
         ui_debug "Sourcing PortGroup $group $version from $groupFile"
     } else {
-        lappend PortInfo(portgroups) [list $group $version ""]
-        ui_warn "PortGroup ${group} ${version} could not be located. ${group}-${version}.tcl does not exist."
+        ui_error "${subport}: PortGroup ${group} ${version} could not be located. ${group}-${version}.tcl does not exist."
+        return -code error "PortGroup not found"
     }
 }
 
@@ -2737,8 +2805,8 @@ proc extract_archive_metadata {archive_location archive_type metadata_type} {
         file delete -force $tempdir
     }
     if {$metadata_type eq "contents"} {
-        set contents {}
-        set binary_info {}
+        set contents [list]
+        set binary_info [list]
         set ignore 0
         set sep [file separator]
         foreach line [split $raw_contents \n] {
@@ -2849,7 +2917,7 @@ proc merge {base} {
 
     # traverse the base-architecture directory
     set basepath "${base}/${base_arch}"
-    fs-traverse file "${basepath}" {
+    fs-traverse file [list $basepath] {
         set fpath [string range "${file}" [string length "${basepath}"] [string length "${file}"]]
         if {${fpath} ne ""} {
             # determine the type (dir/file/link)
@@ -2906,7 +2974,7 @@ proc chown {path user} {
     lchown $path $user
 
     if {[file isdirectory $path]} {
-        fs-traverse myfile ${path} {
+        fs-traverse myfile [list $path] {
             lchown $myfile $user
         }
     }
@@ -3168,7 +3236,7 @@ proc get_canonical_archs {} {
     global supported_archs os.arch configure.build_arch configure.universal_archs
     if {$supported_archs eq "noarch"} {
         return "noarch"
-    } elseif {[variant_exists universal] && [variant_isset universal]} {
+    } elseif {[variant_exists universal] && [variant_isset universal] && [llength ${configure.universal_archs}] >= 2} {
         return [lsort -ascii ${configure.universal_archs}]
     } elseif {${configure.build_arch} ne ""} {
         return ${configure.build_arch}
@@ -3179,7 +3247,7 @@ proc get_canonical_archs {} {
 
 # returns the flags that should be passed to the compiler to choose arch(s)
 proc get_canonical_archflags {{tool cc}} {
-    if {![variant_exists universal] || ![variant_isset universal]} {
+    if {![variant_exists universal] || ![variant_isset universal] || [llength [option configure.universal_archs]] < 2} {
         if {[catch {option configure.${tool}_archflags} flags]} {
             return -code error "archflags do not exist for tool '$tool'"
         }
@@ -3200,28 +3268,8 @@ proc check_supported_archs {} {
     if {$supported_archs eq "noarch"} {
         return 0
     } elseif {[variant_exists universal] && [variant_isset universal]} {
-        if {[llength ${configure.universal_archs}] > 1 || $universal_archs eq ${configure.universal_archs}} {
-            return 0
-        }
-        set unsupported ""
-        if {$supported_archs ne ""} {
-            foreach arch $universal_archs {
-                if {$arch ni $supported_archs} {
-                    set unsupported $arch
-                    break
-                }
-            }
-        }
-        if {$unsupported ne ""} {
-            ui_error "$subport cannot be installed for the configured universal_archs '$universal_archs' because it only supports the arch(s) '$supported_archs'."
-        } else {
-            foreach arch $universal_archs {
-                if {$arch ni ${configure.universal_archs}} {
-                    lappend unsupported $arch
-                }
-            }
-            ui_error "$subport cannot be installed for the configured universal_archs '$universal_archs' because the arch(s) '$unsupported' are not supported."
-        }
+        # universal variant would not exist if < 2 universal_archs were supported
+        return 0
     } elseif {$build_arch eq "" || ${configure.build_arch} ne ""} {
         return 0
     } elseif {$supported_archs ne "" && $build_arch ni $supported_archs} {
@@ -3234,10 +3282,10 @@ proc check_supported_archs {} {
 
 # check if the installed xcode version is new enough
 proc _check_xcode_version {} {
-    global os.subplatform macosx_version xcodeversion use_xcode subport
+    global os.subplatform os.major macos_version_major xcodeversion use_xcode subport
 
     if {${os.subplatform} eq "macosx"} {
-        switch $macosx_version {
+        switch $macos_version_major {
             10.4 {
                 set min 2.0
                 set ok 2.4.1
@@ -3286,17 +3334,27 @@ proc _check_xcode_version {} {
             10.13 {
                 set min 9.0
                 set ok 9.0
-                set rec 9.3
+                set rec 9.4.1
             }
             10.14 {
                 set min 10.0
                 set ok 10.0
-                set rec 10.0
+                set rec 10.3
+            }
+            10.15 {
+                set min 11.0
+                set ok 11.3
+                set rec 11.7
+            }
+            11 {
+                set min 12.2
+                set ok 12.2
+                set rec 12.5
             }
             default {
-                set min 10.0
-                set ok 10.0
-                set rec 10.0
+                set min 12.2
+                set ok 12.2
+                set rec 12.5
             }
         }
         if {$xcodeversion eq "none"} {
@@ -3309,15 +3367,15 @@ proc _check_xcode_version {} {
                 return 1
             }
         } elseif {[vercmp $xcodeversion $min] < 0} {
-            ui_error "The installed version of Xcode (${xcodeversion}) is too old to use on the installed OS version. Version $rec or later is recommended on macOS ${macosx_version}."
+            ui_error "The installed version of Xcode (${xcodeversion}) is too old to use on the installed OS version. Version $rec or later is recommended on macOS ${macos_version_major}."
             return 1
         } elseif {[vercmp $xcodeversion $ok] < 0} {
-            ui_warn "The installed version of Xcode (${xcodeversion}) is known to cause problems. Version $rec or later is recommended on macOS ${macosx_version}."
+            ui_warn "The installed version of Xcode (${xcodeversion}) is known to cause problems. Version $rec or later is recommended on macOS ${macos_version_major}."
         }
 
-        # Xcode 4.3 and above requires the command-line utilities package to be installed. 
+        # Xcode 4.3 and above requires the command-line utilities package to be installed.
         if {[vercmp $xcodeversion 4.3] >= 0 || ($xcodeversion eq "none" && [file exists "/Applications/Xcode.app"])} {
-            if {[vercmp $macosx_version 10.9] >= 0} {
+            if {[vercmp $macos_version_major 10.9] >= 0} {
                 # on Mavericks, /usr/bin/make might always installed as a shim into the command line tools installer.
                 # Let's check for /Library/Developer/CommandLineTools, installed by the
                 # com.apple.pkg.CLTools_Executables package.
@@ -3327,14 +3385,23 @@ proc _check_xcode_version {} {
             }
 
             # Check whether /usr/include and /usr/bin/make exist and tell users to install the command line tools, if they don't
-            if {[vercmp $xcodeversion 9.3] < 0 && (![file isdirectory [file join $cltpath usr include]] || ![file executable  [file join $cltpath usr bin make]])} {
-                ui_warn "System headers do not appear to be installed. Most ports should build correctly, but if you experience problems due to a port depending on system headers, please file a ticket at https://trac.macports.org."
-                if {[vercmp $macosx_version 10.9] >= 0} {
+            if {${os.major} <= 17 && (![file isdirectory [file join $cltpath usr include]] || ![file executable  [file join $cltpath usr bin make]])} {
+                if {[vercmp $xcodeversion 10.0] >= 0} {
+                    ui_warn "System headers do not appear to be installed. Ports may not build correctly due to Xcode 10 only providing a 10.14 SDK."
+                } else {
+                    ui_warn "System headers do not appear to be installed. Most ports should build correctly, but if you experience problems due to a port depending on system headers, please file a ticket at https://trac.macports.org."
+                }
+                if {[vercmp $macos_version_major 10.9] >= 0} {
                     ui_warn "You can install them as part of the Xcode Command Line Tools package by running `xcode-select --install'."
                 } else {
                     ui_warn "You can install them as part of the Xcode Command Line Tools package from Xcode's Preferences in the Downloads section."
                     ui_warn "See https://guide.macports.org/chunked/installing.xcode.html#installing.xcode.lion.43 for more information."
                 }
+            }
+
+            if {${os.major} >= 18 && [option configure.sdk_version] ne "" && ![string match MacOSX[option configure.sdk_version]*.sdk [file tail [option configure.sdkroot]]]} {
+                ui_warn "The macOS [option configure.sdk_version] SDK does not appear to be installed. Ports may not build correctly."
+                ui_warn "You can install it as part of the Xcode Command Line Tools package by running `xcode-select --install'."
             }
 
             # Check whether users have agreed to the Xcode license agreement
@@ -3414,4 +3481,23 @@ proc _archive_available {} {
 
     set archive_available_result 0
     return 0
+}
+
+# get the mountpoint providing a given directory
+proc get_mountpoint {target_dir} {
+    file stat ${target_dir} target_stat
+
+    set parentdir ${target_dir}
+
+    while {$parentdir ne "/"} {
+        file stat [file dirname $parentdir] stat
+
+        if {$stat(dev) != $target_stat(dev)} {
+            return $parentdir
+        }
+
+        set parentdir [file dirname $parentdir]
+    }
+
+    return $parentdir
 }

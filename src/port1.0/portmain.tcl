@@ -48,14 +48,18 @@ set_ui_prefix
 # define options
 options prefix name version revision epoch categories maintainers \
         long_description description homepage notes license \
-        provides conflicts replaced_by \
+        provides conflicts replaced_by known_fail \
         worksrcdir filesdir distname portdbpath libpath distpath sources_conf \
         os.platform os.subplatform os.version os.major os.minor os.arch os.endian \
         platforms default_variants install.user install.group \
         macosx_deployment_target universal_variant os.universal_supported \
+        universal_possible \
         supported_archs depends_skip_archcheck installs_libs \
         license_noconflict copy_log_files \
-        compiler.cpath compiler.library_path \
+        compiler.cpath compiler.library_path compiler.log_verbose_output \
+        compiler.limit_flags \
+        compiler.support_environment_paths \
+        compiler.support_environment_sdkroot \
         add_users use_xcode
 
 proc portmain::check_option_integer {option action args} {
@@ -75,7 +79,10 @@ option_proc epoch portmain::check_option_integer
 option_proc revision portmain::check_option_integer
 
 # Export options via PortInfo
-options_export name version revision epoch categories maintainers platforms description long_description notes homepage license provides conflicts replaced_by installs_libs license_noconflict patchfiles
+options_export name version revision epoch categories maintainers \
+               platforms description long_description notes homepage \
+               license provides conflicts replaced_by installs_libs \
+               license_noconflict patchfiles known_fail
 
 default subport {[portmain::get_default_subport]}
 proc portmain::get_default_subport {} {
@@ -121,6 +128,7 @@ default install.user {${portutil::autoconf::install_user}}
 default install.group {${portutil::autoconf::install_group}}
 
 # Platform Settings
+default platforms darwin
 default os.platform {$os_platform}
 default os.subplatform {$os_subplatform}
 default os.version {$os_version}
@@ -129,11 +137,11 @@ default os.minor {$os_minor}
 default os.arch {$os_arch}
 default os.endian {$os_endian}
 
-set macosx_version_text {}
+set macos_version_text {}
 if {[option os.platform] eq "darwin"} {
-    set macosx_version_text "(macOS ${macosx_version}) "
+    set macos_version_text "(macOS ${macos_version}) "
 }
-ui_debug "OS [option os.platform]/[option os.version] ${macosx_version_text}arch [option os.arch]"
+ui_debug "OS [option os.platform]/[option os.version] ${macos_version_text}arch [option os.arch]"
 
 default universal_variant {${use_configure}}
 
@@ -144,8 +152,14 @@ if {[option os.platform] eq "darwin" && [option os.subplatform] eq "macosx"} {
     default os.universal_supported no
 }
 
+default universal_possible {[expr {${os.universal_supported} && [llength ${configure.universal_archs}] >= 2}]}
+
 default compiler.cpath {${prefix}/include}
 default compiler.library_path {${prefix}/lib}
+default compiler.log_verbose_output yes
+default compiler.limit_flags no
+default compiler.support_environment_paths no
+default compiler.support_environment_sdkroot no
 
 # Record initial euid/egid
 set euid [geteuid]
@@ -154,7 +168,7 @@ set egid [getegid]
 default worksymlink {[file normalize [file join $portpath work]]}
 default distpath {[file normalize [file join $portdbpath distfiles ${dist_subdir}]]}
 
-default use_xcode {[expr {[option build.type] eq "xcode" || ![file exists /usr/lib/libxcselect.dylib] || ![file executable /Library/Developer/CommandLineTools/usr/bin/make]}]}
+default use_xcode {[expr {[option build.type] eq "xcode" || !([file exists /usr/lib/libxcselect.dylib] || [option os.major] >= 20) || ![file executable /Library/Developer/CommandLineTools/usr/bin/make]}]}
 
 proc portmain::main {args} {
     return 0

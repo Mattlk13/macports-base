@@ -116,7 +116,8 @@ proc break_softcontinue { msg status name_status } {
 # show the URL for the ticket reporting instructions
 proc print_tickets_url {args} {
     if {${macports::prefix} ne "/usr/local" && ${macports::prefix} ne "/usr"} {
-        ui_error "Follow https://guide.macports.org/#project.tickets to report a bug."
+        set len [string length [macports::ui_prefix_default error]]
+        ui_error [wrap "Follow https://guide.macports.org/#project.tickets if you believe there is a bug." -${len}]
     }
 }
 
@@ -504,18 +505,19 @@ proc wrap {string maxlen {indent ""} {indentfirstline 1}} {
 # @see wrap
 #
 # @param line input line
-# @param maxlen text width (0 defaults to current terminal width)
+# @param maxlen text width (0 defaults to current terminal width,
+#        negative numbers reduce width from terminal's)
 # @param indent prepend to every line
 # @return wrapped string
 proc wrapline {line maxlen {indent ""} {indentfirstline 1}} {
     global env
 
-    if {$maxlen == 0} {
+    if {$maxlen <= 0} {
         if {![info exists env(COLUMNS)]} {
             # no width for wrapping
-            return $string
+            return $line
         }
-        set maxlen $env(COLUMNS)
+        set maxlen [expr {$env(COLUMNS) + $maxlen}]
     }
 
     set string [split $line " "]
@@ -2056,13 +2058,22 @@ proc action_info { action portlist opts } {
         # Interpret a convenient field abbreviation
         if {[info exists options(ports_info_depends)] && $options(ports_info_depends) eq "yes"} {
             array unset options ports_info_depends
-            set options(ports_info_depends_fetch) yes
-            set options(ports_info_depends_extract) yes
-            set options(ports_info_depends_patch) yes
-            set options(ports_info_depends_build) yes
-            set options(ports_info_depends_lib) yes
-            set options(ports_info_depends_run) yes
-            set options(ports_info_depends_test) yes
+            set all_depends_options [list ports_info_depends_fetch ports_info_depends_extract \
+                ports_info_depends_patch ports_info_depends_build ports_info_depends_lib \
+                ports_info_depends_run ports_info_depends_test]
+            foreach depends_option $all_depends_options {
+                set options($depends_option) yes
+            }
+            # replace all occurrences of --depends with the expanded options
+            while 1 {
+                set order_pos [lsearch -exact $global_options(options_${action}_order) ports_info_depends]
+                if {$order_pos != -1} {
+                    set global_options(options_${action}_order) [lreplace $global_options(options_${action}_order) \
+                        $order_pos $order_pos {*}$all_depends_options]
+                } else {
+                    break
+                }
+            }
         }
 
         # Set up our field separators
@@ -2104,15 +2115,13 @@ proc action_info { action portlist opts } {
         # Spin through action options, emitting information for any found
         set fields {}
 
-        # This contains the display fields in random order
-        set opts_info [array names options ports_info_*]
         # This contains all parameters in order given on command line
         set opts_action $global_options(options_${action}_order)
         # Get the display fields in order provided on command line
         #  ::struct::set intersect does not keep order of items
         set opts_todo {}
         foreach elem $opts_action {
-            if {$elem in $opts_info} {
+            if {[info exists options($elem)]} {
                 lappend opts_todo $elem
             }
         }
@@ -2370,6 +2379,8 @@ proc action_location { action portlist opts } {
 
 
 proc action_notes { action portlist opts } {
+    global UI_PREFIX
+
     if {[require_portlist portlist]} {
         return 1
     }
@@ -2434,12 +2445,12 @@ proc action_notes { action portlist opts } {
 
         # Display the notes.
         if {$portnotes ne {}} {
-            ui_notice "$portname has the following notes:"
+            ui_notice "$UI_PREFIX $portname has the following notes:"
             foreach note $portnotes {
                 puts [wrap $note 0 "  " 1]
             }
         } else {
-            puts "$portname has no notes."
+            ui_notice "$UI_PREFIX $portname has no notes."
         }
     }
     return $status
@@ -3287,19 +3298,18 @@ proc action_installed { action portlist opts } {
             set ivariants [lindex $i 3]
             set iactive [lindex $i 4]
             set extra ""
-            set nvariants ""
             if {[macports::ui_isset ports_verbose]} {
                 set regref [registry::open_entry $iname $iversion $irevision $ivariants [lindex $i 5]]
-                set nvariants [registry::property_retrieve $regref negated_variants]
-                if {$nvariants == 0} {
-                    set nvariants ""
+                set rvariants [registry::property_retrieve $regref requested_variants]
+                if {$rvariants != 0} {
+                    append extra " requested_variants='$rvariants'"
                 }
                 set os_platform [registry::property_retrieve $regref os_platform]
                 set os_major [registry::property_retrieve $regref os_major]
-                set archs [registry::property_retrieve $regref archs]
                 if {$os_platform != 0 && $os_platform ne "" && $os_major != 0 && $os_major ne ""} {
                     append extra " platform='$os_platform $os_major'"
                 }
+                set archs [registry::property_retrieve $regref archs]
                 if {$archs != 0 && $archs ne ""} {
                     append extra " archs='$archs'"
                 }
@@ -3309,9 +3319,9 @@ proc action_installed { action portlist opts } {
                 }
             }
             if { $iactive == 0 } {
-                puts "  $iname @${iversion}_${irevision}${ivariants}${nvariants}${extra}"
+                puts "  $iname @${iversion}_${irevision}${ivariants}${extra}"
             } elseif { $iactive == 1 } {
-                puts "  $iname @${iversion}_${irevision}${ivariants}${nvariants} (active)${extra}"
+                puts "  $iname @${iversion}_${irevision}${ivariants} (active)${extra}"
             }
         }
     } elseif { $restrictedList } {
@@ -4132,6 +4142,17 @@ proc action_target { action portlist opts } {
             set porturl $portinfo(porturl)
         }
 
+        # If version was specified, it can be a version glob for use
+        # with the clean action. For other actions, error out if we're
+        # being asked for a version we can't provide.
+        if {[string length $portversion]} {
+            if {$action eq "clean"} {
+                set options(ports_version_glob) $portversion
+            } elseif {$portversion ne "$portinfo(version)_$portinfo(revision)" && $portversion ne $portinfo(version)} {
+                break_softcontinue "$portname version $portversion is not available (current version is $portinfo(version)_$portinfo(revision))" 1 status
+            }
+        }
+
         # use existing variants iff none were explicitly requested
         if {[array get requested_variations] eq "" && [array get variations] ne ""} {
             array unset requested_variations
@@ -4146,11 +4167,6 @@ proc action_target { action portlist opts } {
             }
         }
 
-        # If version was specified, save it as a version glob for use
-        # in port actions (e.g. clean).
-        if {[string length $portversion]} {
-            set options(ports_version_glob) $portversion
-        }
         # if installing, mark the port as explicitly requested
         if {$action eq "install"} {
             if {![info exists options(ports_install_unrequested)]} {
@@ -5047,6 +5063,21 @@ namespace eval portclient::progress {
         }
     }
 
+    proc barWidth {reservedCols} {
+        global env
+        variable maxWidth
+
+        if {![info exists env(COLUMNS)]} {
+            return $maxWidth
+        }
+
+        if {$reservedCols > $env(COLUMNS)} {
+            return [expr {min($maxWidth, $env(COLUMNS)}]
+        } else {
+            return [expr {min($maxWidth, $env(COLUMNS) - $reservedCols)}]
+        }
+    }
+
     ##
     # Progress callback for generic operations executed by macports 1.0.
     #
@@ -5077,9 +5108,9 @@ namespace eval portclient::progress {
                         set barPrefix "      "
                         set barPrefixLen [string length $barPrefix]
                         if {$total != 0} {
-                            progressbar $now $total [expr {min($maxWidth, $env(COLUMNS) - $barPrefixLen)}] $barPrefix
+                            progressbar $now $total [barWidth $barPrefixLen] $barPrefix
                         } else {
-                            unprogressbar [expr {min($maxWidth, $env(COLUMNS) - $barPrefixLen)}] $barPrefix
+                            unprogressbar [barWidth $barPrefixLen] $barPrefix
                         }
                     }
                 }
@@ -5131,15 +5162,15 @@ namespace eval portclient::progress {
                         if {$total != 0} {
                             set barSuffix [format "        speed: %-13s" "[bytesize $speed {} "%.1f"]/s"]
                             set barSuffixLen [string length $barSuffix]
+                            set barWidth [barWidth [expr {$barPrefixLen + $barSuffixLen}]]
 
-                            set barLen [expr {min($maxWidth, $env(COLUMNS) - $barPrefixLen - $barSuffixLen)}]
-                            progressbar $now $total $barLen $barPrefix $barSuffix
+                            progressbar $now $total $barWidth $barPrefix $barSuffix
                         } else {
                             set barSuffix [format " %-10s     speed: %-13s" [bytesize $now {} "%6.1f"] "[bytesize $speed {} "%.1f"]/s"]
                             set barSuffixLen [string length $barSuffix]
+                            set barWidth [barWidth [expr {$barPrefixLen + $barSuffixLen}]]
 
-                            set barLen [expr {min($maxWidth, $env(COLUMNS) - $barPrefixLen - $barSuffixLen)}]
-                            unprogressbar $barLen $barPrefix $barSuffix
+                            unprogressbar $barWidth $barPrefix $barSuffix
                         }
                     }
                 }

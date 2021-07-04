@@ -59,6 +59,7 @@ proc active {name} {
     set rlist [list]
     foreach port $ports {
         lappend rlist [list [$port name] [$port version] [$port revision] [$port variants] [string equal [$port state] "installed"] [$port epoch]]
+        #registry::entry close $port
     }
     return $rlist
 }
@@ -99,6 +100,9 @@ proc open_entry {name version revision variants epoch} {
 # @return 1, if the port exists, 0 otherwise.
 proc entry_exists {name version {revision 0} {variants ""}} {
     if {![catch {set ports [registry::entry search name $name version $version revision $revision variants $variants]}] && [llength $ports] > 0} {
+        #foreach port $ports {
+        #    registry::entry close $port
+        #}
         return 1
     }
     return 0
@@ -112,6 +116,9 @@ proc entry_exists {name version {revision 0} {variants ""}} {
 # @return 1 if a port with the given name exists in the registry, 0 otherwise.
 proc entry_exists_for_name {name} {
     if {![catch {set ports [registry::entry search name $name]}] && [llength $ports] > 0} {
+        #foreach port $ports {
+        #    registry::entry close $port
+        #}
         return 1
     }
     return 0
@@ -130,7 +137,9 @@ proc entry_exists_for_name {name} {
 proc file_registered {file cs} {
     set port [registry::entry owner $file $cs]
     if {$port ne ""} {
-        return [$port name]
+        set ret [$port name]
+        #registry::entry close $port
+        return $ret
     } else {
         return 0
     }
@@ -150,8 +159,13 @@ proc port_registered {name} {
     if {![catch {set ports [registry::entry installed $name]}] && [llength $ports] > 0} {
         # should never return more than one port
         set port [lindex $ports 0]
-        return [$port files]
+        set ret [$port files]
+        #registry::entry close $port
+        return $ret
     } elseif {![catch {set ports [registry::entry imaged $name]}] && [llength $ports] > 0} {
+        #foreach port $ports {
+        #    registry::entry close $port
+        #}
         return ""
     } else {
         return 0
@@ -231,11 +245,13 @@ proc installed {{name ""} {version ""}} {
     } elseif {$name ne "" && $version eq ""} {
         set ports [registry::entry imaged $name]
     } else {
-        set ports {}
+        set ports [list]
         set possible_ports [registry::entry imaged $name]
         foreach p $possible_ports {
             if {"[$p version]_[$p revision][$p variants]" eq $version || [$p version] eq $version} {
                 lappend ports $p
+            } else {
+                #registry::entry close $p
             }
         }
     }
@@ -243,6 +259,7 @@ proc installed {{name ""} {version ""}} {
     set rlist [list]
     foreach port $ports {
         lappend rlist [list [$port name] [$port version] [$port revision] [$port variants] [string equal [$port state] "installed"] [$port epoch]]
+        #registry::entry close $port
     }
     return $rlist
 }
@@ -276,7 +293,7 @@ proc open_dep_map {args} {
 #         criteria.
 proc list_depends {name version revision variants} {
     set rlist [list]
-    set searchkeys {}
+    set searchkeys [list]
     foreach key {name version revision} {
         if {[set $key] ne ""} {
             lappend searchkeys $key [set $key]
@@ -291,7 +308,9 @@ proc list_depends {name version revision variants} {
     foreach port $ports {
         foreach dep [$port dependencies] {
             lappend rlist [list [$dep name] port [$port name]]
+            #registry::entry close $dep
         }
+        #registry::entry close $port
     }
 
     return [lsort -unique $rlist]
@@ -318,7 +337,7 @@ proc list_depends {name version revision variants} {
 #         search criteria.
 proc list_dependents {name version revision variants} {
     set rlist [list]
-    set searchkeys {}
+    set searchkeys [list]
     foreach key {name version revision} {
         if {[set $key] ne ""} {
             lappend searchkeys $key [set $key]
@@ -334,7 +353,9 @@ proc list_dependents {name version revision variants} {
         set dependents [$port dependents]
         foreach dependent $dependents {
             lappend rlist [list [$port name] port [$dependent name]]
+            #registry::entry close $dependent
         }
+        #registry::entry close $port
     }
 
     return [lsort -unique $rlist]
@@ -359,7 +380,7 @@ proc list_dependents {name version revision variants} {
 #  \li \c imagefiles A list of files installed by this port
 #  \li \c files A list of filenames as which the imagefiles should be activated
 #      if state is "installed"
-#  \li \c negated_variants The canonical representation of the negated variants
+#  \li \c requested_variants The canonical representation of the requested variants
 #  \li \c os_platform The platform on which the port was installed
 #  \li \c os_major The major version of the OS on which the port was installed
 #  \li \c archs A list of architectures of this port
@@ -381,7 +402,7 @@ proc create_entry_l {proplist} {
                 if {[llength $props(imagefiles)] != [llength $props(files)]} {
                     # deal with this mess, just drop the extras...
                     set i 0
-                    set ilist {}; set flist {}
+                    set ilist [list]; set flist [list]
                     while {$i < [llength $props(imagefiles)] && $i < [llength $props(files)]} {
                         lappend ilist [lindex $props(imagefiles) $i]
                         lappend flist [lindex $props(files) $i]
@@ -395,7 +416,7 @@ proc create_entry_l {proplist} {
         } else {
             $regref map $props(files)
         }
-        foreach key {negated_variants os_platform os_major archs} {
+        foreach key {requested_variants os_platform os_major archs} {
             if {$props($key) != 0} {
                 $regref $key $props($key)
             } else {
@@ -407,6 +428,7 @@ proc create_entry_l {proplist} {
         }
         $regref portfile $props(portfile)
     }
+    #registry::entry close $regref
 }
 
 # End of receipt_sqlite namespace

@@ -91,7 +91,7 @@ namespace eval diagnose {
 
         array set config_options    [list]
         set parser_options          [list macports_location profile_path shell_location \
-                                    xcode_version_${macports::macosx_version} xcode_build]
+                                    xcode_version_${macports::macos_version_major} xcode_build]
 
         set user_config_path        "${macports::autoconf::macports_conf_path}/port_diagnose.ini"
         set xcode_config_path       [macports::getdefaultportresourcepath "macports1.0/xcode_versions.ini"]
@@ -150,9 +150,7 @@ namespace eval diagnose {
 
         output "command line tools"
 
-        set version ${macports::macosx_version}
-
-        if {$version eq "10.9"} {
+        if {${macports::macos_version_major} eq "10.9"} {
 
             if {![file exists "/Library/Developer/CommandLineTools/"]} {
 
@@ -166,7 +164,7 @@ namespace eval diagnose {
 
         } else {
 
-            set xcode_select [exec xcode-select -p]
+            set xcode_select [exec xcode-select -print-path]
 
             if {$xcode_select eq ""} {
 
@@ -371,6 +369,7 @@ namespace eval diagnose {
                 set activeApps([$app name]) $files
                 incr totalFiles [llength $files]
             }
+            #registry::entry close $app
         }
 
         set fancyOutput [expr {   ![macports::ui_isset ports_debug] \
@@ -442,6 +441,7 @@ namespace eval diagnose {
             if {![file exists [$port location]]} {
                 ui_warn "couldn't find the archive for '[$port name] @[$port version]_[$port revision][$port variants]'. Please uninstall and reinstall this port."
             }
+            #registry::entry close $port
         }
     }
 
@@ -491,7 +491,7 @@ namespace eval diagnose {
         # Returns:
         #           None
 
-        if {${macports::macosx_version} eq "10.6"} {
+        if {${macports::macos_version_major} eq "10.6"} {
             output "X11.app on Mac OS X 10.6 systems"
 
             if {[file exists /Applications/X11.app]} {
@@ -587,7 +587,7 @@ namespace eval diagnose {
 
         upvar $config_options config
 
-        set mac_version     ${macports::macosx_version}
+        set mac_version     ${macports::macos_version_major}
         set xcode_current   ${macports::xcodeversion}
         if {[info exists config(xcode_version_$mac_version)]} {
             set xcode_versions  $config(xcode_version_$mac_version)

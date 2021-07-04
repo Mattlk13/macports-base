@@ -105,9 +105,6 @@
 /* Define to 1 if you have the <md5.h> header file. */
 #undef HAVE_MD5_H
 
-/* Define to 1 if you have the <memory.h> header file. */
-#undef HAVE_MEMORY_H
-
 /* Define to 1 if you have the <openssl/md5.h> header file. */
 #undef HAVE_OPENSSL_MD5_H
 
@@ -171,6 +168,9 @@
 /* Define to 1 if you have the <stdint.h> header file. */
 #undef HAVE_STDINT_H
 
+/* Define to 1 if you have the <stdio.h> header file. */
+#undef HAVE_STDIO_H
+
 /* Define to 1 if you have the <stdlib.h> header file. */
 #undef HAVE_STDLIB_H
 
@@ -225,6 +225,9 @@
 /* Define to 1 if you have the <utime.h> header file. */
 #undef HAVE_UTIME_H
 
+/* Define to 1 if you have the `_dyld_shared_cache_contains_path' function. */
+#undef HAVE__DYLD_SHARED_CACHE_CONTAINS_PATH
+
 /* Define to 1 if you have the `__getdirentries64' function. */
 #undef HAVE___GETDIRENTRIES64
 
@@ -233,6 +236,9 @@
 
 /* Lowest non-system-reserved UID. */
 #undef MIN_USABLE_UID
+
+/* SQLite version found */
+#undef MP_SQLITE_VERSION
 
 /* Define to the address where bug reports for this package should be sent. */
 #undef PACKAGE_BUGREPORT
@@ -255,7 +261,9 @@
 /* Define to 1 if static build is requested */
 #undef STATIC_BUILD
 
-/* Define to 1 if you have the ANSI C header files. */
+/* Define to 1 if all of the C90 standard headers exist (not just the ones
+   required in a freestanding environment). This macro is provided for
+   backward compatibility; new code need not use it. */
 #undef STDC_HEADERS
 
 /* Attribute to mark unused variables */
